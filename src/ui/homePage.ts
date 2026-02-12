@@ -695,10 +695,9 @@ export function renderHomePage(): string {
           <div class="kpi-value"><span id="kpiProfit">-</span><span class="kpi-change" id="kpiProfitPct">-</span></div>
           <div class="kpi-sub" id="kpiDaily">\u0414\u0430\u043d\u043d\u044b\u0435 \u043f\u043e\u044f\u0432\u044f\u0442\u0441\u044f \u043f\u043e\u0441\u043b\u0435 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438</div>
           <div class="profit-tooltip">
-            <div class="profit-tooltip-title">\u0424\u043e\u0440\u043c\u0443\u043b\u0430: \u0442\u0435\u043a\u0443\u0449\u0430\u044f + \u043f\u0440\u043e\u0434\u0430\u0436\u0438 + \u043d\u0430\u0447\u0438\u0441\u043b\u0435\u043d\u0438\u044f - \u043f\u043e\u043a\u0443\u043f\u043a\u0438 - \u043a\u043e\u043c\u0438\u0441\u0441\u0438\u0438 - \u043d\u0430\u043b\u043e\u0433\u0438</div>
+            <div class="profit-tooltip-title">\u0424\u043e\u0440\u043c\u0443\u043b\u0430: \u0442\u0435\u043a\u0443\u0449\u0430\u044f + \u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442 \u0441\u0434\u0435\u043b\u043e\u043a + \u043d\u0430\u0447\u0438\u0441\u043b\u0435\u043d\u0438\u044f - \u043a\u043e\u043c\u0438\u0441\u0441\u0438\u0438 - \u043d\u0430\u043b\u043e\u0433\u0438</div>
             <div class="profit-tooltip-row"><span>\u0422\u0435\u043a\u0443\u0449\u0430\u044f \u0441\u0442\u043e\u0438\u043c\u043e\u0441\u0442\u044c</span><span id="tipCurrentValue">-</span></div>
-            <div class="profit-tooltip-row"><span>\u041f\u0440\u043e\u0434\u0430\u0436\u0438</span><span id="tipSells">-</span></div>
-            <div class="profit-tooltip-row"><span>\u041f\u043e\u043a\u0443\u043f\u043a\u0438</span><span id="tipBuys">-</span></div>
+            <div class="profit-tooltip-row"><span>\u0420\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442 \u0441\u0434\u0435\u043b\u043e\u043a</span><span id="tipTradesNet">-</span></div>
             <div class="profit-tooltip-row"><span>\u041a\u0443\u043f\u043e\u043d\u044b</span><span id="tipCoupons">-</span></div>
             <div class="profit-tooltip-row"><span>\u0414\u0438\u0432\u0438\u0434\u0435\u043d\u0434\u044b</span><span id="tipDividends">-</span></div>
             <div class="profit-tooltip-row"><span>\u041a\u043e\u043c\u0438\u0441\u0441\u0438\u0438</span><span id="tipCommissions">-</span></div>
@@ -824,8 +823,7 @@ export function renderHomePage(): string {
         profitPct: 0,
         profitBreakdown: {
           currentValue: 0,
-          buys: 0,
-          sells: 0,
+          tradesNet: 0,
           coupons: 0,
           dividends: 0,
           commissions: 0,
@@ -836,7 +834,7 @@ export function renderHomePage(): string {
       };
 
       const CACHE_KEYS = {
-        portfolio: "home_portfolio_cache_v8",
+        portfolio: "home_portfolio_cache_v9",
         accounts: "home_accounts_cache_v1"
       };
 
@@ -879,8 +877,7 @@ export function renderHomePage(): string {
       const tipCommissionsEl = document.getElementById("tipCommissions");
       const tipTaxesEl = document.getElementById("tipTaxes");
       const tipCurrentValueEl = document.getElementById("tipCurrentValue");
-      const tipSellsEl = document.getElementById("tipSells");
-      const tipBuysEl = document.getElementById("tipBuys");
+      const tipTradesNetEl = document.getElementById("tipTradesNet");
 
       function formatRub(value) {
         return new Intl.NumberFormat("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value) + " \u20BD";
@@ -1102,8 +1099,7 @@ export function renderHomePage(): string {
           tipCommissionsEl.textContent = "-";
           tipTaxesEl.textContent = "-";
           tipCurrentValueEl.textContent = "-";
-          tipSellsEl.textContent = "-";
-          tipBuysEl.textContent = "-";
+          tipTradesNetEl.textContent = "-";
           return;
         }
 
@@ -1124,8 +1120,7 @@ export function renderHomePage(): string {
         document.getElementById("kpiPassiveGrowth").textContent = formatPct(passivePct);
         document.getElementById("kpiPassiveYear").textContent = formatRub(passiveYear) + " за 12 мес";
         tipCurrentValueEl.textContent = formatSignedRub(state.profitBreakdown.currentValue || 0);
-        tipSellsEl.textContent = formatSignedRub(state.profitBreakdown.sells || 0);
-        tipBuysEl.textContent = formatSignedRub(-(state.profitBreakdown.buys || 0));
+        tipTradesNetEl.textContent = formatSignedRub(state.profitBreakdown.tradesNet || 0);
         tipCouponsEl.textContent = formatSignedRub(state.profitBreakdown.coupons || 0);
         tipDividendsEl.textContent = formatSignedRub(state.profitBreakdown.dividends || 0);
         tipCommissionsEl.textContent = formatSignedRub(-(state.profitBreakdown.commissions || 0));
@@ -1345,8 +1340,7 @@ export function renderHomePage(): string {
           state.profitPct = Number(portfolioCache.profitPct) || 0;
           state.profitBreakdown = {
             currentValue: Number(portfolioCache?.profitBreakdown?.currentValue) || 0,
-            buys: Number(portfolioCache?.profitBreakdown?.buys) || 0,
-            sells: Number(portfolioCache?.profitBreakdown?.sells) || 0,
+            tradesNet: Number(portfolioCache?.profitBreakdown?.tradesNet) || 0,
             coupons: Number(portfolioCache?.profitBreakdown?.coupons) || 0,
             dividends: Number(portfolioCache?.profitBreakdown?.dividends) || 0,
             commissions: Number(portfolioCache?.profitBreakdown?.commissions) || 0,
@@ -1456,8 +1450,7 @@ export function renderHomePage(): string {
             state.profitPct = parseNumberFromText(analyticsBody.profitPct || "0");
             state.profitBreakdown = {
               currentValue: parseNumberFromText(analyticsBody?.profitBreakdown?.currentValueRub || "0"),
-              buys: Math.abs(parseNumberFromText(analyticsBody?.profitBreakdown?.buysRub || "0")),
-              sells: parseNumberFromText(analyticsBody?.profitBreakdown?.sellsRub || "0"),
+              tradesNet: parseNumberFromText(analyticsBody?.profitBreakdown?.tradesNetRub || "0"),
               coupons: parseNumberFromText(analyticsBody?.profitBreakdown?.couponsRub || "0"),
               dividends: parseNumberFromText(analyticsBody?.profitBreakdown?.dividendsRub || "0"),
               commissions: Math.abs(parseNumberFromText(analyticsBody?.profitBreakdown?.commissionsRub || "0")),
@@ -1467,7 +1460,7 @@ export function renderHomePage(): string {
             if (totalFromAnalytics > 0) {
               state.portfolioTotalValue = totalFromAnalytics;
             }
-            state.investedTotal = Math.max(0, state.profitBreakdown.buys || 0);
+            state.investedTotal = Math.max(0, state.portfolioTotalValue - state.profitTotal);
             state.futureSeries = mapMonthSeries(analyticsBody.incomeNext12);
             state.dividendSeries = mapMonthSeries(analyticsBody.receivedDividends12);
             state.upcomingEvents = Array.isArray(analyticsBody.upcomingEvents)
@@ -1481,8 +1474,7 @@ export function renderHomePage(): string {
             if (!state.upcomingEvents.length) state.upcomingEvents = [];
             state.profitBreakdown = {
               currentValue: 0,
-              buys: 0,
-              sells: 0,
+              tradesNet: 0,
               coupons: 0,
               dividends: 0,
               commissions: 0,
