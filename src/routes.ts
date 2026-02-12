@@ -425,8 +425,7 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       );
       const firstBuyByFigi = new Map<string, number>();
       const firstBuyByUid = new Map<string, number>();
-      let buyTotal = 0;
-      let sellTotal = 0;
+      let tradesNet = 0;
       let couponsIncome = 0;
       let dividendsIncome = 0;
       let commissionsTotal = 0;
@@ -613,8 +612,7 @@ export function registerRoutes(app: Express, config: AppConfig): void {
                 opTypeText.includes("dividend") ||
                 opTypeText.includes("coupon")));
 
-          if (isBuy) buyTotal += base;
-          if (isSell) sellTotal += base;
+          if (isBuy || isSell) tradesNet += raw;
 
           if (isCouponIncome) {
             // Купоны учитываем по факту получения, включая уже проданные/погашенные бумаги.
@@ -648,13 +646,12 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       const yieldPct = xirrValue === null ? null : xirrValue * 100;
       const operationProfit =
         totalCurrent +
-        sellTotal +
+        tradesNet +
         couponsIncome +
         dividendsIncome -
-        buyTotal -
         commissionsTotal -
         taxesTotal;
-      const profitBase = buyTotal > 0 ? buyTotal : totalCurrent;
+      const profitBase = totalCurrent > 0 ? totalCurrent : Math.abs(tradesNet);
       const operationProfitPct =
         profitBase > 0 ? (operationProfit / profitBase) * 100 : 0;
 
@@ -970,8 +967,7 @@ export function registerRoutes(app: Express, config: AppConfig): void {
         profitPct: formatPercent(operationProfitPct),
         profitBreakdown: {
           currentValueRub: formatMoney(totalCurrent, currency),
-          buysRub: formatMoney(buyTotal, currency),
-          sellsRub: formatMoney(sellTotal, currency),
+          tradesNetRub: formatMoney(tradesNet, currency),
           couponsRub: formatMoney(couponsIncome, currency),
           dividendsRub: formatMoney(dividendsIncome, currency),
           commissionsRub: formatMoney(commissionsTotal, currency),
