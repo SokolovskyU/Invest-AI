@@ -38,7 +38,12 @@ function collectBrokenStrings(value: JsonValue, path: string, out: string[]): vo
 
 function main(): void {
   const raw = fs.readFileSync(FILE_PATH, "utf8");
-  const parsed = JSON.parse(raw) as JsonValue;
+  const normalized = raw.replace(/^\uFEFF/, "");
+  if (normalized !== raw) {
+    // Heal BOM-encoded file in-place so other tools read it safely.
+    fs.writeFileSync(FILE_PATH, normalized, "utf8");
+  }
+  const parsed = JSON.parse(normalized) as JsonValue;
   const brokenPaths: string[] = [];
   collectBrokenStrings(parsed, "$", brokenPaths);
 

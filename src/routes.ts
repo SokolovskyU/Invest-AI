@@ -55,6 +55,14 @@ export function registerRoutes(app: Express, config: AppConfig): void {
     createInstrumentsClient,
     createMarketDataClient,
   };
+  const isBlockedPosition = (p: any): boolean => {
+    if (!p) return false;
+    if (p.blocked === true) return true;
+    const blockedLots = toNumber(p.blocked_lots || p.blockedLots);
+    if (Number.isFinite(blockedLots) && blockedLots > 0) return true;
+    const blocked = Number(p.blocked);
+    return Number.isFinite(blocked) && blocked > 0;
+  };
 
   app.get("/", (_req, res) => {
     res.set("Content-Type", "text/html; charset=utf-8");
@@ -122,9 +130,10 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       }
 
       const portfolio = (response as PortfolioResponse) || {};
-      const positions: any[] = Array.isArray(portfolio.positions)
+      const rawPositions: any[] = Array.isArray(portfolio.positions)
         ? portfolio.positions
         : [];
+      const positions = rawPositions.filter((p) => !isBlockedPosition(p));
       const instrumentsClient = clients.createInstrumentsClient(endpoint);
       const marketDataClient = clients.createMarketDataClient(endpoint);
 
@@ -186,33 +195,103 @@ export function registerRoutes(app: Express, config: AppConfig): void {
               ),
             ]);
 
+            const addPrice = (map: Map<string, number>, item: any) => {
+              const price = toNumber(item?.price);
+              const instrumentUid = String(item?.instrument_uid || "").trim();
+              const figi = String(item?.figi || "").trim();
+              if (instrumentUid) map.set(instrumentUid, price);
+              if (figi) map.set(figi, price);
+            };
+
             const lastPrices = Array.isArray(lastPricesResp?.last_prices)
               ? lastPricesResp.last_prices
               : [];
-            lastPricesById = lastPrices.reduce((map: Map<string, number>, item: any) => {
-              const key = String(item?.instrument_uid || item?.figi || "").trim();
-              if (!key) return map;
-              map.set(key, toNumber(item?.price));
-              return map;
-            }, new Map<string, number>());
+            lastPricesById = new Map<string, number>();
+            for (const item of lastPrices) addPrice(lastPricesById, item);
 
             const closePrices = Array.isArray(closePricesResp?.close_prices)
               ? closePricesResp.close_prices
               : [];
-            closePricesById = closePrices.reduce((map: Map<string, number>, item: any) => {
-              const key = String(item?.instrument_uid || item?.figi || "").trim();
-              if (!key) return map;
-              map.set(key, toNumber(item?.price));
-              return map;
-            }, new Map<string, number>());
+            closePricesById = new Map<string, number>();
+            for (const item of closePrices) addPrice(closePricesById, item);
+
+            const missingDayPriceIds = uniqueInstrumentIds.filter((id) => {
+              const last = lastPricesById.get(id);
+              const close = closePricesById.get(id);
+              return !(Number.isFinite(last) && Number.isFinite(close) && (close as number) !== 0);
+            });
+
+            if (missingDayPriceIds.length && typeof marketDataClient.GetCandles === "function") {
+              const now = new Date();
+              const from = new Date(now.getTime() - 1000 * 60 * 60 * 24 * 14);
+              const fromSeconds = Math.floor(from.getTime() / 1000);
+              const toSeconds = Math.floor(now.getTime() / 1000);
+
+              const fallbackPrices = await mapLimit(
+                missingDayPriceIds,
+                8,
+                async (instrumentId) => {
+                  const candlesResp: any = await grpcCallWithRetry(
+                    marketDataClient.GetCandles.bind(marketDataClient),
+                    {
+                      instrument_id: instrumentId,
+                      from: { seconds: fromSeconds, nanos: 0 },
+                      to: { seconds: toSeconds, nanos: 0 },
+                      interval: "CANDLE_INTERVAL_DAY",
+                    },
+                    metadata,
+                    1
+                  );
+                  const candles = Array.isArray(candlesResp?.candles)
+                    ? candlesResp.candles
+                    : [];
+                  const normalized = candles
+                    .map((candle: any) => {
+                      const close = toNumber(candle?.close);
+                      const seconds = Number(candle?.time?.seconds || 0);
+                      const nanos = Number(candle?.time?.nanos || 0);
+                      return {
+                        close,
+                        complete: candle?.is_complete !== false,
+                        timeMs: seconds * 1000 + Math.floor(nanos / 1_000_000),
+                      };
+                    })
+                    .filter((row: any) => Number.isFinite(row.close) && row.complete && row.timeMs > 0)
+                    .sort((a: any, b: any) => a.timeMs - b.timeMs);
+                  if (normalized.length < 2) return null;
+                  const latest = normalized[normalized.length - 1];
+                  const prev = normalized[normalized.length - 2];
+                  if (!Number.isFinite(latest.close) || !Number.isFinite(prev.close) || prev.close === 0) {
+                    return null;
+                  }
+                  return {
+                    instrumentId,
+                    lastPrice: latest.close,
+                    closePrice: prev.close,
+                  };
+                }
+              );
+
+              for (const item of fallbackPrices) {
+                if (!item) continue;
+                const existingLast = lastPricesById.get(item.instrumentId);
+                const existingClose = closePricesById.get(item.instrumentId);
+                if (!Number.isFinite(existingLast)) {
+                  lastPricesById.set(item.instrumentId, item.lastPrice);
+                }
+                if (!Number.isFinite(existingClose) || (existingClose as number) === 0) {
+                  closePricesById.set(item.instrumentId, item.closePrice);
+                }
+              }
+            }
           } catch {
             lastPricesById = new Map<string, number>();
             closePricesById = new Map<string, number>();
           }
         }
 
-        const prettyPositions = await Promise.all(
-          positions.map(async (p) => {
+      const prettyPositions = await Promise.all(
+        positions.map(async (p) => {
             const avg = toNumber(p.average_position_price);
             const cur = toNumber(p.current_price);
             const qty = toNumber(p.quantity);
@@ -282,12 +361,18 @@ export function registerRoutes(app: Express, config: AppConfig): void {
 
         prettyPositions.sort((a, b) => a.name.localeCompare(b.name, "ru"));
 
-        const total = portfolio.total_amount_portfolio
-          ? formatMoney(
-              toNumber(portfolio.total_amount_portfolio),
-              portfolio.total_amount_portfolio.currency
-            )
-          : "";
+      const totalCurrency = (portfolio.total_amount_portfolio?.currency || "RUB").toUpperCase();
+      const totalCurrent = positions.reduce((sum, p) => {
+        const cur = toNumber(p.current_price);
+        const qty = toNumber(p.quantity);
+        return sum + cur * qty;
+      }, 0);
+      const total =
+        totalCurrent > 0
+          ? formatMoney(totalCurrent, totalCurrency)
+          : portfolio.total_amount_portfolio
+            ? formatMoney(toNumber(portfolio.total_amount_portfolio), totalCurrency)
+            : "";
 
         res.json({
           total,
@@ -325,9 +410,10 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       }
 
       const portfolio = (response as PortfolioResponse) || {};
-      const positions: any[] = Array.isArray(portfolio.positions)
+      const rawPositions: any[] = Array.isArray(portfolio.positions)
         ? portfolio.positions
         : [];
+      const positions = rawPositions.filter((p) => !isBlockedPosition(p));
       const instrumentsClient = clients.createInstrumentsClient(endpoint);
 
       if (positions.length) {
@@ -430,19 +516,81 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       let dividendsIncome = 0;
       let commissionsTotal = 0;
       let taxesTotal = 0;
+      const opSeenKeys = new Set<string>();
+      const makeOpKey = (op: any): string => {
+        const id = String(op?.id || "").trim();
+        if (id) return "id:" + id;
+        return [
+          String(op?.date?.seconds || 0),
+          String(op?.operation_type ?? op?.type ?? ""),
+          String(op?.payment?.units ?? ""),
+          String(op?.payment?.nano ?? ""),
+          String(op?.payment?.currency ?? op?.currency ?? ""),
+          String(op?.figi ?? ""),
+          String(op?.instrument_uid ?? op?.instrumentUid ?? ""),
+          String(op?.quantity ?? ""),
+        ].join("|");
+      };
 
       try {
-        const opsResp: any = await grpcCall(
-          client.GetOperations.bind(client),
-          {
-            account_id: accountId,
-            from: { seconds: fromSeconds, nanos: 0 },
-            to: { seconds: toSeconds, nanos: 0 },
-            state: "OPERATION_STATE_EXECUTED",
-          },
-          metadata
-        );
-        const ops = Array.isArray(opsResp?.operations) ? opsResp.operations : [];
+        let ops: any[] = [];
+        if (typeof client.GetOperationsByCursor === "function") {
+          try {
+            let cursor = "";
+            let pageGuard = 0;
+            while (pageGuard < 500) {
+              const pageResp: any = await grpcCall(
+                client.GetOperationsByCursor.bind(client),
+                {
+                  account_id: accountId,
+                  from: { seconds: fromSeconds, nanos: 0 },
+                  to: { seconds: toSeconds, nanos: 0 },
+                  state: "OPERATION_STATE_EXECUTED",
+                  cursor,
+                  limit: 1000,
+                  without_trades: true,
+                },
+                metadata
+              );
+              const pageItems = Array.isArray(pageResp?.items) ? pageResp.items : [];
+              if (pageItems.length) {
+                for (const item of pageItems) {
+                  const key = makeOpKey(item);
+                  if (opSeenKeys.has(key)) continue;
+                  opSeenKeys.add(key);
+                  ops.push(item);
+                }
+              }
+              const nextCursor = String(pageResp?.next_cursor || "");
+              const hasNext = Boolean(pageResp?.has_next);
+              if (!hasNext || !nextCursor || nextCursor === cursor) break;
+              cursor = nextCursor;
+              pageGuard += 1;
+            }
+          } catch {
+            // fallback to GetOperations below
+            ops = [];
+          }
+        }
+        if (!ops.length) {
+          const opsResp: any = await grpcCall(
+            client.GetOperations.bind(client),
+            {
+              account_id: accountId,
+              from: { seconds: fromSeconds, nanos: 0 },
+              to: { seconds: toSeconds, nanos: 0 },
+              state: "OPERATION_STATE_EXECUTED",
+            },
+            metadata
+          );
+          const fallbackOps = Array.isArray(opsResp?.operations) ? opsResp.operations : [];
+          for (const item of fallbackOps) {
+            const key = makeOpKey(item);
+            if (opSeenKeys.has(key)) continue;
+            opSeenKeys.add(key);
+            ops.push(item);
+          }
+        }
         const excludeTypes = new Set([
           "OPERATION_TYPE_INPUT",
           "OPERATION_TYPE_OUTPUT",
@@ -490,14 +638,21 @@ export function registerRoutes(app: Express, config: AppConfig): void {
           "OPERATION_TYPE_OUT_STAMP_DUTY",
           "OPERATION_TYPE_OUTPUT_PENALTY",
           "OPERATION_TYPE_ADVICE_FEE",
+          "OPERATION_TYPE_OVER_COM",
         ]);
-        const commissionTypeIds = new Set([12, 19, 24, 30, 31, 14, 45, 46, 47, 55, 56]);
+        const commissionTypeIds = new Set([12, 14, 19, 24, 30, 31, 45, 46, 47, 55, 56, 62]);
         const payoutTaxTypes = new Set([
+          "OPERATION_TYPE_TAX",
+          "OPERATION_TYPE_TAX_CORRECTION",
+          "OPERATION_TYPE_TAX_PROGRESSIVE",
+          "OPERATION_TYPE_TAX_CORRECTION_PROGRESSIVE",
           "OPERATION_TYPE_DIVIDEND_TAX",
           "OPERATION_TYPE_BOND_TAX",
           "OPERATION_TYPE_DIVIDEND_TAX_PROGRESSIVE",
           "OPERATION_TYPE_BOND_TAX_PROGRESSIVE",
+          "OPERATION_TYPE_TAX_CORRECTION_COUPON",
         ]);
+        const payoutTaxTypeIds = new Set([2, 5, 8, 11, 32, 33, 34, 36, 44]);
         const expenseTypes = new Set([
           "OPERATION_TYPE_TAX",
           "OPERATION_TYPE_DIVIDEND_TAX",
@@ -520,6 +675,23 @@ export function registerRoutes(app: Express, config: AppConfig): void {
           "OPERATION_TYPE_TAX_REPO_HOLD",
           "OPERATION_TYPE_WRITING_OFF_VARMARGIN",
         ]);
+        const isCommissionOperation = (opType: unknown, opTypeStr: string, opTypeNum: number): boolean =>
+          commissionTypes.has(opType as string) ||
+          commissionTypes.has(opTypeStr) ||
+          commissionTypeIds.has(opTypeNum);
+        const hasExplicitCommissionOps = ops.some((op) => {
+          const opType = op?.operation_type ?? op?.type ?? "";
+          const opTypeStr = String(opType || "").toUpperCase();
+          const opTypeNum = Number(opType);
+          if (excludeTypes.has(opType) || excludeTypes.has(opTypeStr)) return false;
+          const opCurrency = (op?.payment?.currency || op?.currency || "").toUpperCase();
+          if (opCurrency && opCurrency !== currency) return false;
+          const seconds = Number(op?.date?.seconds || 0);
+          if (!seconds) return false;
+          const raw = toNumber(op?.payment);
+          if (!Number.isFinite(raw) || raw === 0) return false;
+          return isCommissionOperation(opType, opTypeStr, opTypeNum);
+        });
         for (const op of ops) {
           const opType = op?.operation_type ?? op?.type ?? "";
           const opTypeStr = String(opType || "").toUpperCase();
@@ -587,7 +759,7 @@ export function registerRoutes(app: Express, config: AppConfig): void {
           const commCurrency = (op?.commission?.currency || "").toUpperCase();
           const commissionFromField =
             commission && (!commCurrency || commCurrency === currency) ? commission : 0;
-          if (commissionFromField) {
+          if (commissionFromField > 0 && !hasExplicitCommissionOps) {
             cashflows.push({ time: seconds * 1000, amount: -commissionFromField });
           }
 
@@ -599,13 +771,11 @@ export function registerRoutes(app: Express, config: AppConfig): void {
             receivedDividendTypes.has(opType) ||
             receivedDividendTypes.has(opTypeStr) ||
             receivedDividendTypeIds.has(opTypeNum);
-          const isCommission =
-            commissionTypes.has(opType) ||
-            commissionTypes.has(opTypeStr) ||
-            commissionTypeIds.has(opTypeNum);
+          const isCommission = isCommissionOperation(opType, opTypeStr, opTypeNum);
           const isPayoutTax =
             payoutTaxTypes.has(opType) ||
             payoutTaxTypes.has(opTypeStr) ||
+            payoutTaxTypeIds.has(opTypeNum) ||
             (opTypeStr.includes("TAX") &&
               (opTypeText.includes("дивид") ||
                 opTypeText.includes("купон") ||
@@ -627,8 +797,8 @@ export function registerRoutes(app: Express, config: AppConfig): void {
           if (isCommission) {
             // payment < 0 means fee charged, payment > 0 means refund
             commissionsTotal += -raw;
-          } else if (commissionFromField > 0) {
-            // Trade operations often carry commission in separate field.
+          } else if (!hasExplicitCommissionOps && commissionFromField > 0) {
+            // Use per-trade commission only when separate fee operations are absent.
             commissionsTotal += commissionFromField;
           }
           if (isPayoutTax) {
@@ -864,6 +1034,16 @@ export function registerRoutes(app: Express, config: AppConfig): void {
             }
             const dividendType = String(d?.dividend_type || "").toLowerCase();
             if (dividendType.includes("cancel")) continue;
+            if (dividendType && !dividendType.includes("regular")) continue;
+            if (
+              dividendType.includes("daily") ||
+              dividendType.includes("return") ||
+              dividendType.includes("capital") ||
+              dividendType.includes("special") ||
+              dividendType.includes("extra")
+            ) {
+              continue;
+            }
             const amount = toNumber(d?.dividend_net) * qty;
             if (!Number.isFinite(amount) || amount <= 0) continue;
             const cur = (d?.dividend_net?.currency || currency).toUpperCase();
@@ -902,8 +1082,19 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       const next12Keys = buildMonthList(now, 12);
       const incomeNext12 = next12Keys.map((k) => ({
         month: monthLabel(k),
+        value: next12Map.get(k) || 0,
         amount: formatMoney(next12Map.get(k) || 0, currency),
       }));
+      const passiveIncomeTotal = incomeNext12.reduce((sum, row) => sum + row.value, 0);
+      const passiveBaseValue = positions.reduce((sum, p) => {
+        const type = (p.instrument_type || "").toLowerCase();
+        if (type === "currency") return sum;
+        const cur = toNumber(p.current_price);
+        const qty = toNumber(p.quantity);
+        return sum + cur * qty;
+      }, 0);
+      const passiveIncomeYieldPct =
+        passiveBaseValue > 0 ? (passiveIncomeTotal / passiveBaseValue) * 100 : 0;
 
       const dividendsStart = new Date(now.getFullYear(), now.getMonth() - 11, 1);
       const dividends12Keys = buildMonthList(dividendsStart, 12);
@@ -916,6 +1107,7 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       }
       const receivedDividends12 = dividends12Keys.map((k) => ({
         month: monthLabel(k),
+        value: dividends12Map.get(k) || 0,
         amount: formatMoney(dividends12Map.get(k) || 0, currency),
       }));
 
@@ -964,13 +1156,20 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       res.json({
         total: formatMoney(totalCurrent, currency),
         profitRub: formatMoney(operationProfit, currency),
+        profitValue: operationProfit,
         profitPct: formatPercent(operationProfitPct),
         profitBreakdown: {
+          currentValue: totalCurrent,
           currentValueRub: formatMoney(totalCurrent, currency),
+          tradesNet: tradesNet,
           tradesNetRub: formatMoney(tradesNet, currency),
+          coupons: couponsIncome,
           couponsRub: formatMoney(couponsIncome, currency),
+          dividends: dividendsIncome,
           dividendsRub: formatMoney(dividendsIncome, currency),
+          commissions: commissionsTotal,
           commissionsRub: formatMoney(commissionsTotal, currency),
+          taxes: taxesTotal,
           taxesRub: formatMoney(taxesTotal, currency),
           marketProfitRub: formatMoney(marketProfit, currency),
           marketProfitPct: formatPercent(marketProfitPct),
@@ -981,6 +1180,11 @@ export function registerRoutes(app: Express, config: AppConfig): void {
         bondCompanies,
         bondCompaniesCount: "Компаний: " + String(bondCompanies.length),
         incomeNext12,
+        passiveIncomeTotal,
+        passiveIncomeTotalRub: formatMoney(passiveIncomeTotal, currency),
+        passiveIncomeBaseValue: passiveBaseValue,
+        passiveIncomeBaseRub: formatMoney(passiveBaseValue, currency),
+        passiveIncomeYieldPct: formatPercent(passiveIncomeYieldPct),
         receivedDividends12,
         redemptionsNext12,
         redemptionsDetails,

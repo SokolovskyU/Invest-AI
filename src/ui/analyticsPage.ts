@@ -8,147 +8,280 @@
     <style>
       @import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap");
       :root {
-        --bg-1: #e5ece7;
-        --bg-2: #dbe5de;
-        --bg-3: #cfdad1;
-        --panel: #f8fbf9f0;
-        --line: #d8e5df;
-        --text: #182224;
-        --muted: #526569;
-        --accent: #0c8b77;
-        --accent-2: #0b6f8a;
-        --error: #b00020;
-        color-scheme: light;
+        --bg: #202433;
+        --bg-2: #1a1f2d;
+        --panel: #2b3040;
+        --panel-2: #2f3547;
+        --line: #48506a;
+        --line-soft: #3a4258;
+        --text: #f4f6fd;
+        --muted: #9ca4bd;
+        --cyan: #58d7ea;
+        --blue: #6ea2ff;
+        --green: #53dc8f;
+        --red: #ff7f73;
+        --topbar: #24293a;
         font-family: "Manrope", "Segoe UI", sans-serif;
-        color: var(--text);
+      }
+      * {
+        box-sizing: border-box;
       }
       body {
         margin: 0;
-        min-height: 100vh;
-        padding: 34px 22px 56px;
+        color: var(--text);
         background:
-          radial-gradient(1200px 600px at -10% -25%, #dbe7e0 0%, transparent 58%),
-          radial-gradient(1000px 700px at 120% -20%, #cfded6 0%, transparent 62%),
-          linear-gradient(165deg, var(--bg-1) 0%, var(--bg-3) 100%);
+          radial-gradient(1000px 520px at 100% -30%, #2a3048 0%, transparent 65%),
+          radial-gradient(900px 460px at -10% -35%, #25304a 0%, transparent 63%),
+          linear-gradient(180deg, var(--bg-2) 0%, var(--bg) 100%);
+        min-height: 100vh;
+        font-size: 16px;
       }
-      .card {
-        max-width: 980px;
+      .topbar {
+        background: var(--topbar);
+        border-bottom: 1px solid #31374d;
+      }
+      .topbar-inner {
+        max-width: 1360px;
         margin: 0 auto;
-        background: var(--panel);
-        border-radius: 24px;
-        padding: 28px;
-        backdrop-filter: blur(8px);
-        box-shadow: 0 18px 42px rgba(51, 74, 65, 0.1);
-        border: 1px solid #eef3f0;
+        padding: 14px 18px;
+        display: flex;
+        align-items: center;
+        gap: 22px;
+      }
+      .nav {
+        display: flex;
+        gap: 8px;
+      }
+      .nav a {
+        color: var(--muted);
+        text-decoration: none;
+        padding: 10px 15px;
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 15px;
+      }
+      .nav a.is-active {
+        color: #fff;
+        background: #3e455d;
+      }
+      .nav a:hover {
+        color: #fff;
+        background: #383f57;
+      }
+      .grow {
+        flex: 1;
+      }
+      .ghost-btn {
+        border: 2px solid #16afff;
+        color: #eef6ff;
+        background: transparent;
+        border-radius: 8px;
+        padding: 8px 14px;
+        font-size: 16px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .ghost-btn:hover {
+        background: #1b2e4f;
+      }
+      .controls {
+        display: none;
+        max-width: 1360px;
+        margin: 0 auto;
+        padding: 10px 18px 16px;
+        gap: 8px;
+        grid-template-columns: 1.3fr 1fr auto auto auto;
+      }
+      .controls.is-open {
+        display: grid;
+      }
+      .controls input,
+      .controls button {
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: #262d3f;
+        color: var(--text);
+        padding: 10px 12px;
+      }
+      .controls input:focus {
+        outline: none;
+        border-color: #5f87d4;
+      }
+      .controls button {
+        cursor: pointer;
+        font-weight: 700;
+      }
+      .load-btn {
+        background: linear-gradient(140deg, #2480ff 0%, #2bb7ff 100%);
+        border: none;
+      }
+      .secondary-btn {
+        border: 1px solid #4d5673;
+        background: #2a3043;
+        color: #dbe3fa;
+      }
+      .load-btn:disabled,
+      .secondary-btn:disabled,
+      .tab-btn:disabled {
+        opacity: 0.65;
+        cursor: default;
+      }
+      .page {
+        max-width: 1360px;
+        margin: 0 auto;
+        padding: 28px 18px 24px;
       }
       h1 {
         margin: 0 0 12px;
-        font-size: clamp(28px, 4vw, 34px);
-        letter-spacing: -0.6px;
-        line-height: 1.05;
+        font-size: clamp(34px, 5.4vw, 48px);
+        letter-spacing: -0.8px;
       }
-      p {
-        margin: 0 0 16px;
-        color: var(--muted);
+      .subtle {
+        margin: 0;
+        color: #a8b1cc;
+        font-size: 15px;
       }
-      label {
-        display: block;
-        font-weight: 700;
-        margin-bottom: 8px;
-        color: #213135;
+      .analytics-intro-hidden {
+        display: none !important;
       }
-      input, button, select {
-        font-size: 14px;
-        padding: 11px 13px;
-        border-radius: 12px;
-        border: 1px solid var(--line);
-        transition: all 0.16s ease;
-      }
-      input, select {
-        width: 100%;
-        box-sizing: border-box;
-        margin-bottom: 12px;
-        background: #f9fcfb;
-        color: var(--text);
-      }
-      input:focus, select:focus {
-        outline: none;
-        border-color: #83c7ba;
-        box-shadow: 0 0 0 4px rgba(12, 139, 119, 0.12);
-        background: #ffffff;
-      }
-      button {
-        background: linear-gradient(140deg, var(--accent) 0%, var(--accent-2) 100%);
-        color: #fff;
-        border: none;
-        cursor: pointer;
-        box-shadow: 0 10px 20px rgba(11, 111, 138, 0.22);
-      }
-      button:hover:not(:disabled) {
-        transform: translateY(-1px);
-        box-shadow: 0 14px 24px rgba(11, 111, 138, 0.26);
-      }
-      button:disabled {
-        opacity: 0.6;
-        cursor: default;
-        box-shadow: none;
-      }
-      .row {
-        display: flex;
-        gap: 12px;
-        align-items: flex-end;
-        flex-wrap: wrap;
-      }
-      .row > input {
-        flex: 1 1 260px;
-        margin-bottom: 0;
-      }
-      .row > button {
-        white-space: nowrap;
-        min-height: 42px;
-      }
-      .hint {
-        font-size: 12px;
-        color: #657b80;
-      }
-      .token-toggle {
-        margin-bottom: 10px;
-        background: #eff6f4;
-        color: #214248;
-        border: 1px solid #d3e2de;
-        box-shadow: none;
-      }
-      .token-toggle:hover:not(:disabled) {
-        box-shadow: none;
-        transform: none;
-        background: #e8f1ef;
-      }
-      .token-panel {
+      .kpis {
+        margin-top: 20px;
         display: grid;
-        gap: 10px;
-        overflow: hidden;
-        transition: max-height 0.2s ease, opacity 0.2s ease;
-        max-height: 220px;
-        opacity: 1;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 20px;
       }
-      .token-panel.is-collapsed {
-        max-height: 0;
+      .kpi {
+        background: var(--panel-2);
+        border: 1px solid #353d55;
+        border-radius: 10px;
+        padding: 22px 24px;
+        min-height: 162px;
+        position: relative;
+      }
+      .kpi-label {
+        display: flex;
+        gap: 9px;
+        align-items: center;
+        color: #c5cae0;
+        font-size: 18px;
+        font-weight: 700;
+      }
+      .dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 3px;
+        display: inline-block;
+      }
+      .dot.cost { background: #2ea8ff; }
+      .dot.profit { background: #4fd88d; }
+      .dot.yield { background: #7f59ff; }
+      .dot.passive { background: #3ed5ac; }
+      .kpi-value {
+        margin-top: 20px;
+        font-size: clamp(26px, 3.3vw, 40px);
+        font-weight: 800;
+        letter-spacing: -1.3px;
+        line-height: 0.98;
+      }
+      .kpi-sub {
+        margin-top: 14px;
+        font-size: 16px;
+        color: #9fa7c1;
+        font-weight: 700;
+      }
+      .kpi-change {
+        color: var(--green);
+        font-size: 22px;
+        font-weight: 800;
+        margin-left: 14px;
+      }
+      .profit-tooltip {
+        position: absolute;
+        right: 12px;
+        top: 12px;
+        width: 250px;
+        border-radius: 10px;
+        border: 1px solid #485270;
+        background: rgba(26, 31, 45, 0.97);
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+        padding: 10px 12px;
         opacity: 0;
+        transform: translateY(-4px);
+        transition: opacity 0.16s ease, transform 0.16s ease;
         pointer-events: none;
+        z-index: 15;
       }
-      .remember-row {
+      .kpi-profit-card:hover .profit-tooltip {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      .profit-tooltip-title {
+        font-size: 12px;
+        color: #c9d4f0;
+        font-weight: 800;
+        margin-bottom: 6px;
+      }
+      .profit-tooltip-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 12px;
+        color: #c6d0ea;
+        margin-top: 2px;
+      }
+      .profit-tooltip-row span:last-child {
+        font-weight: 700;
+        color: #f2f6ff;
+      }
+      .currency-row {
+        margin-top: 20px;
+        background: #2d3346;
+        border: 1px solid #3f4762;
+        border-radius: 10px;
+        padding: 18px 20px;
         display: flex;
         align-items: center;
-        gap: 8px;
-        margin: 0;
-        font-weight: 600;
+        gap: 10px;
       }
-      .remember-row input {
-        width: auto;
-        margin: 0;
+      .currency-chevron {
+        color: #8a95b7;
+        font-size: 21px;
+        line-height: 1;
+      }
+      .currency-label {
+        font-size: 36px;
+        font-weight: 800;
+        letter-spacing: -0.6px;
+      }
+      .currency-value {
+        color: #9fb0ce;
+        font-size: 32px;
+        font-weight: 700;
+      }
+      .panel {
+        margin-top: 20px;
+        background: var(--panel);
+        border: 1px solid #343c54;
+        border-radius: 10px;
+        padding: 18px;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .status {
+        margin-top: 10px;
+        color: #a7b0cb;
+        font-size: 14px;
+      }
+      .hint {
+        margin-top: 8px;
+        color: #a7b0cb;
+        font-size: 13px;
       }
       .section {
-        margin-top: 24px;
+        margin-top: 16px;
       }
       .grid {
         display: grid;
@@ -156,106 +289,101 @@
         gap: 14px;
       }
       .metric {
-        border: 1px solid #e2ece8;
-        background: linear-gradient(180deg, #ffffff 0%, #f8fcfb 100%);
-        border-radius: 14px;
+        border: 1px solid #3f4762;
+        background: #2d3346;
+        border-radius: 10px;
         padding: 14px;
       }
       .metric h4 {
         margin: 0 0 8px;
         font-size: 13px;
-        color: #556a70;
+        color: #adb8d5;
       }
       .metric div {
         font-size: 20px;
-        font-weight: 700;
+        font-weight: 800;
+        color: #f1f6ff;
       }
       table {
         width: 100%;
         border-collapse: collapse;
-        border-radius: 12px;
-        overflow: hidden;
       }
-      th, td {
+      th,
+      td {
         text-align: left;
-        padding: 8px 10px;
-        border-bottom: 1px solid #e8f0ed;
+        padding: 10px;
+        border-bottom: 1px solid #414962;
+        color: #dce4f9;
       }
       th {
         font-weight: 700;
-        border-bottom: 1px solid #dce8e4;
-        background: #f2f8f6;
-        color: #294047;
+        background: #31384d;
+        color: #f2f6ff;
       }
       .pill {
         display: inline-block;
-        background: #e8f4ef;
-        color: var(--accent);
+        background: #304d79;
+        color: #cde1ff;
         padding: 3px 10px;
         border-radius: 999px;
         font-size: 12px;
         margin-left: 6px;
         font-weight: 700;
       }
-      a {
-        color: var(--accent-2);
-        text-decoration: none;
-        font-weight: 700;
-      }
-      a:hover {
-        text-decoration: underline;
-      }
-      .subtle {
-        color: #64797f;
-      }
       .bar {
         height: 10px;
         border-radius: 999px;
-        background: #e8f1ef;
+        background: #3a435d;
         overflow: hidden;
         margin-top: 8px;
       }
       .bar > span {
         display: block;
         height: 100%;
-        background: linear-gradient(90deg, var(--accent) 0%, #20b69c 100%);
+        background: linear-gradient(90deg, #2480ff 0%, #2bb7ff 100%);
       }
       .card-block {
-        border: 1px solid #e2ece8;
-        border-radius: 14px;
+        border: 1px solid #3f4762;
+        border-radius: 10px;
         padding: 14px;
-        background: #ffffff;
-      }
-      .actions {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        margin-top: 8px;
+        background: #2d3346;
       }
       .tabs {
-        margin-top: 18px;
+        margin-top: 8px;
       }
       .tab-buttons {
         display: flex;
         flex-wrap: wrap;
-        gap: 8px;
-        margin-bottom: 12px;
+        gap: 14px;
+        margin-bottom: 20px;
+        padding: 0 12px;
+        border: 1px solid #3a435d;
+        border-radius: 10px;
+        background: #2d3346;
       }
       .tab-btn {
-        background: #eaf3f0;
-        color: #29515a;
-        border: 1px solid #d6e5e1;
-        box-shadow: none;
-      }
-      .tab-btn:hover:not(:disabled) {
-        transform: none;
-        box-shadow: none;
-        background: #dfece8;
+        padding: 14px 4px 13px;
+        border: none;
+        border-bottom: 3px solid transparent;
+        background: transparent;
+        color: #b7c2dc;
+        cursor: pointer;
+        font-weight: 700;
+        font-size: 16px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
       }
       .tab-btn.is-active {
-        background: linear-gradient(140deg, var(--accent) 0%, var(--accent-2) 100%);
-        color: #fff;
-        border-color: transparent;
+        color: #2bb7ff;
+        border-bottom-color: #2bb7ff;
+      }
+      .tab-btn:hover {
+        color: #e6ecfb;
+      }
+      .tab-btn .tab-icon {
+        font-size: 14px;
+        opacity: 0.88;
       }
       .tab-panel {
         display: none;
@@ -263,35 +391,40 @@
       .tab-panel.is-active {
         display: block;
       }
-      .error {
-        color: var(--error);
-      }
-      .right {
-        text-align: right;
-      }
       pre {
         margin: 0;
         white-space: pre-wrap;
         word-break: break-word;
       }
       #out {
-        background: #fbfefd;
-        border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 14px;
+        margin-top: 18px;
+        min-height: 140px;
       }
-      @media (max-width: 760px) {
-        body {
-          padding: 20px 12px 28px;
+      @media (max-width: 840px) {
+        .topbar-inner {
+          flex-wrap: wrap;
+          gap: 12px;
         }
-        .card {
-          border-radius: 18px;
-          padding: 16px;
-        }
-        .row > input,
-        .row > button {
-          flex: 1 1 100%;
+        .nav {
           width: 100%;
+          overflow: auto;
+        }
+        .controls {
+          grid-template-columns: 1fr;
+        }
+        .kpis {
+          grid-template-columns: 1fr;
+          gap: 14px;
+        }
+        .currency-label {
+          font-size: 30px;
+        }
+        .currency-value {
+          font-size: 25px;
+        }
+        .tab-btn {
+          font-size: 14px;
+          padding: 10px 2px;
         }
         .actions > button {
           flex: 1 1 100%;
@@ -300,91 +433,166 @@
     </style>
   </head>
   <body>
-    <div class="card">
-      <h1>Аналитика</h1>
-      <p class="subtle">Локальная аналитика по портфелю и доходам.</p>
-      <p><a href="/">Вернуться к портфелю</a></p>
-      <button id="tokenToggle" class="token-toggle" type="button" aria-expanded="false">Show API token</button>
-      <div id="tokenPanel" class="token-panel is-collapsed">
-        <label for="token">API token</label>
-        <input id="token" type="password" placeholder="t.********" />
-        <label class="remember-row">
-          <input id="remember" type="checkbox" />
-          Remember token in browser (localStorage)
-        </label>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <nav class="nav">
+          <a href="/">Главная</a>
+          <a class="is-active" href="/analytics">Аналитика</a>
+          <a href="#">Портфель</a>
+          <a href="#">Инструменты</a>
+        </nav>
+        <div class="grow"></div>
+        <button id="tokenToggle" class="ghost-btn" type="button" aria-expanded="false">
+          token
+        </button>
       </div>
-      <div class="row">
-        <button id="load">Accounts</button>
-        <button id="analyze" disabled>Analytics</button>
+      <div id="controls" class="controls">
+        <input id="token" type="password" placeholder="API токен (t.****)" />
+        <input id="account" list="accounts" placeholder="account_id" />
+        <datalist id="accounts"></datalist>
+        <button id="load" class="load-btn" type="button">Счета</button>
+        <button id="analyze" class="load-btn" type="button" disabled>Аналитика</button>
+        <button id="rememberBtn" class="secondary-btn" type="button">Запомнить токен</button>
       </div>
-      <label for="account">Счет</label>
-      <input id="account" list="accounts" placeholder="account_id" />
-      <datalist id="accounts"></datalist>
-      <div class="actions">
-        <button id="refreshNames">Обновить названия</button>
-        <button id="refreshCache">Сбросить кэш</button>
-      </div>
-      <div id="progress" class="hint"></div>
+    </header>
 
-      <div id="out" class="section">Ожидаю запрос...</div>
-    </div>
+    <main class="page">
+      <h1 class="analytics-intro-hidden">Аналитика</h1>
+      <p class="subtle analytics-intro-hidden">Локальная аналитика по портфелю и доходам.</p>
+
+      <section class="panel analytics-intro-hidden">
+        <div class="actions">
+          <button id="refreshNames" class="secondary-btn" type="button">Обновить названия</button>
+          <button id="refreshCache" class="secondary-btn" type="button">Сбросить кэш</button>
+        </div>
+        <div id="status" class="status">Ожидаю запрос...</div>
+      </section>
+
+      <section id="out" class="section">Ожидаю запрос...</section>
+    </main>
 
     <script>
+      const CACHE_KEYS = {
+        portfolio: "home_portfolio_cache_v11",
+        accounts: "home_accounts_cache_v1",
+        analytics: "analytics_page_cache_v1"
+      };
+
+      const TOKEN_KEYS = {
+        persistent: "tinvest_token",
+        session: "tinvest_token_session"
+      };
+
       const out = document.getElementById("out");
-      const btn = document.getElementById("load");
+      const loadBtn = document.getElementById("load");
       const analyzeBtn = document.getElementById("analyze");
       const tokenInput = document.getElementById("token");
       const tokenToggleBtn = document.getElementById("tokenToggle");
-      const tokenPanel = document.getElementById("tokenPanel");
-      const rememberInput = document.getElementById("remember");
+      const controls = document.getElementById("controls");
       const accountInput = document.getElementById("account");
       const accountsList = document.getElementById("accounts");
+      const rememberBtn = document.getElementById("rememberBtn");
       const refreshNamesBtn = document.getElementById("refreshNames");
       const refreshCacheBtn = document.getElementById("refreshCache");
-      const nameProgressEl = document.getElementById("progress");
+      const statusEl = document.getElementById("status");
 
-      const savedToken = localStorage.getItem("tinvest_token");
-      if (savedToken) {
-        tokenInput.value = savedToken;
-        rememberInput.checked = true;
+      function readCache(key) {
+        try {
+          const raw = localStorage.getItem(key);
+          return raw ? JSON.parse(raw) : null;
+        } catch {
+          return null;
+        }
       }
 
-      function setTokenPanelVisible(isVisible) {
-        tokenPanel.classList.toggle("is-collapsed", !isVisible);
+      function writeCache(key, value) {
+        try {
+          localStorage.setItem(key, JSON.stringify(value));
+        } catch {
+          // ignore storage errors
+        }
+      }
+
+      function getSavedToken() {
+        return (
+          localStorage.getItem(TOKEN_KEYS.persistent) ||
+          sessionStorage.getItem(TOKEN_KEYS.session) ||
+          ""
+        );
+      }
+
+      function saveSessionToken(token) {
+        if (token) {
+          sessionStorage.setItem(TOKEN_KEYS.session, token);
+        } else {
+          sessionStorage.removeItem(TOKEN_KEYS.session);
+        }
+      }
+
+      function setStatus(text) {
+        statusEl.textContent = text;
+      }
+
+      function setControlsVisible(isVisible) {
+        controls.classList.toggle("is-open", isVisible);
         tokenToggleBtn.setAttribute("aria-expanded", String(isVisible));
-        tokenToggleBtn.textContent = isVisible
-          ? "Hide API token"
-          : "Show API token";
       }
 
-      setTokenPanelVisible(Boolean(savedToken));
+      function syncAccountsCache(accounts, accountId) {
+        writeCache(CACHE_KEYS.accounts, {
+          accounts: Array.isArray(accounts) ? accounts : [],
+          accountId: accountId || null,
+          updatedAt: Date.now()
+        });
+      }
 
-      tokenToggleBtn.addEventListener("click", () => {
-        const expanded = tokenToggleBtn.getAttribute("aria-expanded") === "true";
-        setTokenPanelVisible(!expanded);
-      });
+      function syncAccountInSharedCache(accountId) {
+        const normalizedAccountId = accountId || null;
+        const accountsCache = readCache(CACHE_KEYS.accounts);
+        const accounts = Array.isArray(accountsCache?.accounts) ? accountsCache.accounts : [];
+        syncAccountsCache(accounts, normalizedAccountId);
 
-      rememberInput.addEventListener("change", () => {
-        if (!rememberInput.checked) {
-          localStorage.removeItem("tinvest_token");
-        } else if (tokenInput.value.trim()) {
-          localStorage.setItem("tinvest_token", tokenInput.value.trim());
+        const portfolioCache = readCache(CACHE_KEYS.portfolio);
+        if (portfolioCache && typeof portfolioCache === "object") {
+          writeCache(CACHE_KEYS.portfolio, {
+            ...portfolioCache,
+            accountId: normalizedAccountId,
+            updatedAt: Date.now()
+          });
         }
-      });
-
-      tokenInput.addEventListener("input", () => {
-        if (rememberInput.checked) {
-          localStorage.setItem("tinvest_token", tokenInput.value.trim());
-        }
-      });
+      }
 
       function setLoading(isLoading) {
-        btn.disabled = isLoading;
+        loadBtn.disabled = isLoading;
         analyzeBtn.disabled = isLoading || !accountInput.value.trim();
       }
 
+      tokenToggleBtn.addEventListener("click", () => {
+        const expanded = tokenToggleBtn.getAttribute("aria-expanded") === "true";
+        setControlsVisible(!expanded);
+      });
+
+      tokenInput.addEventListener("input", () => {
+        saveSessionToken(tokenInput.value.trim());
+      });
+
+      rememberBtn.addEventListener("click", () => {
+        const token = tokenInput.value.trim();
+        if (!token) {
+          localStorage.removeItem(TOKEN_KEYS.persistent);
+          saveSessionToken("");
+          setStatus("Токен удален из browser storage");
+          return;
+        }
+        saveSessionToken(token);
+        localStorage.setItem(TOKEN_KEYS.persistent, token);
+        setStatus("Токен сохранен в localStorage");
+      });
+
       accountInput.addEventListener("input", () => {
-        analyzeBtn.disabled = !accountInput.value.trim();
+        const accountId = accountInput.value.trim();
+        analyzeBtn.disabled = !accountId;
+        syncAccountInSharedCache(accountId);
       });
 
       function renderAccounts(accounts) {
@@ -392,30 +600,185 @@
         for (const acc of accounts) {
           const option = document.createElement("option");
           option.value = acc.id;
-          option.label = acc.name + " (" + acc.type + ")";
+          option.label = (acc.name || "Счет") + " (" + (acc.type || "-") + ")";
           accountsList.appendChild(option);
         }
         if (!accountInput.value && accounts[0]) {
           accountInput.value = accounts[0].id;
         }
-        analyzeBtn.disabled = !accountInput.value.trim();
+        const accountId = accountInput.value.trim();
+        analyzeBtn.disabled = !accountId;
+        syncAccountsCache(accounts, accountId);
+        syncAccountInSharedCache(accountId);
+      }
+
+      function parseNumberFromText(value) {
+        if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+        if (!value || typeof value !== "string") return 0;
+        const prepared = value
+          .replace(/\u00A0|\u202F/g, " ")
+          .replace(/[\u2212\u2013\u2014]/g, "-");
+        const cleaned = prepared.replace(/[^0-9,.\-]/g, "");
+        if (!cleaned) return 0;
+        const lastComma = cleaned.lastIndexOf(",");
+        const lastDot = cleaned.lastIndexOf(".");
+        let normalized;
+        if (lastComma > lastDot) {
+          normalized = cleaned.replace(/\./g, "").replace(",", ".");
+        } else {
+          normalized = cleaned.replace(/,/g, "");
+        }
+        normalized = normalized.replace(/(?!^)-/g, "");
+        const n = Number(normalized);
+        return Number.isFinite(n) ? n : 0;
+      }
+
+      function formatRub(value) {
+        return new Intl.NumberFormat("ru-RU", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        }).format(value) + " ₽";
+      }
+
+      function formatSignedRub(value) {
+        const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+        return sign + formatRub(Math.abs(value));
+      }
+
+      function formatPct(value) {
+        return new Intl.NumberFormat("ru-RU", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        }).format(value) + "%";
+      }
+
+      function metricNumber(value, fallbackText) {
+        if (typeof value === "number" && Number.isFinite(value)) return value;
+        return parseNumberFromText(fallbackText || "0");
+      }
+
+      function buildSummary(body) {
+        const totalText = body?.total || "-";
+        const totalValue = metricNumber(
+          body?.profitBreakdown?.currentValue,
+          body?.profitBreakdown?.currentValueRub || totalText
+        );
+        const profitValue = metricNumber(body?.profitValue, body?.profitRub || "0");
+        const invested = Math.max(0, totalValue - profitValue);
+        const profitPct = parseNumberFromText(body?.profitPct || "0");
+        const yieldPct = parseNumberFromText(body?.yieldPct || "0");
+        const passivePct = parseNumberFromText(body?.passiveIncomeYieldPct || "0");
+        const passiveTotal = metricNumber(body?.passiveIncomeTotal, body?.passiveIncomeTotalRub || "0");
+        const breakdown = {
+          currentValue: metricNumber(
+            body?.profitBreakdown?.currentValue,
+            body?.profitBreakdown?.currentValueRub || "0"
+          ),
+          tradesNet: metricNumber(body?.profitBreakdown?.tradesNet, body?.profitBreakdown?.tradesNetRub || "0"),
+          coupons: metricNumber(body?.profitBreakdown?.coupons, body?.profitBreakdown?.couponsRub || "0"),
+          dividends: metricNumber(body?.profitBreakdown?.dividends, body?.profitBreakdown?.dividendsRub || "0"),
+          commissions: Math.abs(
+            metricNumber(body?.profitBreakdown?.commissions, body?.profitBreakdown?.commissionsRub || "0")
+          ),
+          taxes: Math.abs(metricNumber(body?.profitBreakdown?.taxes, body?.profitBreakdown?.taxesRub || "0"))
+        };
+        const currencyRow = Array.isArray(body?.assetBreakdown)
+          ? body.assetBreakdown.find((row) => String(row?.type || "").toLowerCase() === "currency")
+          : null;
+        const currencyValue = currencyRow
+          ? metricNumber(currencyRow?.value, currencyRow?.valueText || "0")
+          : 0;
+        return {
+          totalText,
+          invested,
+          profitValue,
+          profitPct,
+          yieldPct,
+          passivePct,
+          passiveTotal,
+          currencyValue,
+          currencyText: currencyRow?.valueText || formatRub(currencyValue),
+          breakdown
+        };
+      }
+
+      function renderKpis(summary) {
+        const section = document.createElement("section");
+        section.className = "kpis";
+        section.innerHTML =
+          "<article class='kpi'>" +
+            "<div class='kpi-label'><span class='dot cost'></span>Стоимость</div>" +
+            "<div class='kpi-value' data-kpi='total'>-</div>" +
+            "<div class='kpi-sub' data-kpi='invested'>-</div>" +
+          "</article>" +
+          "<article class='kpi kpi-profit-card'>" +
+            "<div class='kpi-label'><span class='dot profit'></span>Прибыль</div>" +
+            "<div class='kpi-value'><span data-kpi='profit'>-</span><span class='kpi-change' data-kpi='profitPct'>-</span></div>" +
+            "<div class='kpi-sub' data-kpi='daily'>-</div>" +
+            "<div class='profit-tooltip'>" +
+              "<div class='profit-tooltip-title'>Формула: текущая + результат сделок + начисления - комиссии - налоги</div>" +
+              "<div class='profit-tooltip-row'><span>Текущая стоимость</span><span data-kpi='tipCurrentValue'>-</span></div>" +
+              "<div class='profit-tooltip-row'><span>Результат сделок</span><span data-kpi='tipTradesNet'>-</span></div>" +
+              "<div class='profit-tooltip-row'><span>Купоны</span><span data-kpi='tipCoupons'>-</span></div>" +
+              "<div class='profit-tooltip-row'><span>Дивиденды</span><span data-kpi='tipDividends'>-</span></div>" +
+              "<div class='profit-tooltip-row'><span>Комиссии</span><span data-kpi='tipCommissions'>-</span></div>" +
+              "<div class='profit-tooltip-row'><span>Налоги (див/куп)</span><span data-kpi='tipTaxes'>-</span></div>" +
+            "</div>" +
+          "</article>" +
+          "<article class='kpi'>" +
+            "<div class='kpi-label'><span class='dot yield'></span>Доходность</div>" +
+            "<div class='kpi-value' data-kpi='yield'>-</div>" +
+            "<div class='kpi-sub'>Расчет по текущему портфелю</div>" +
+          "</article>" +
+          "<article class='kpi'>" +
+            "<div class='kpi-label'><span class='dot passive'></span>Пассивный доход</div>" +
+            "<div class='kpi-value'><span data-kpi='passive'>-</span><span class='kpi-change' data-kpi='passiveGrowth'>-</span></div>" +
+            "<div class='kpi-sub' data-kpi='passiveYear'>-</div>" +
+          "</article>";
+
+        const set = (key, value) => {
+          const el = section.querySelector("[data-kpi='" + key + "']");
+          if (el) el.textContent = value;
+        };
+
+        set("total", summary.totalText);
+        set("invested", formatRub(summary.invested) + " вложено");
+        set("profit", (summary.profitValue >= 0 ? "+" : "") + formatRub(summary.profitValue));
+        set("profitPct", formatPct(summary.profitPct));
+        set("daily", "Изменение: " + formatPct(summary.profitPct));
+        set("yield", formatPct(summary.yieldPct));
+        set("passive", formatPct(summary.passivePct));
+        set("passiveGrowth", formatPct(summary.passivePct));
+        set("passiveYear", formatRub(summary.passiveTotal) + " за 12 мес");
+        set("tipCurrentValue", formatSignedRub(summary.breakdown.currentValue));
+        set("tipTradesNet", formatSignedRub(summary.breakdown.tradesNet));
+        set("tipCoupons", formatSignedRub(summary.breakdown.coupons));
+        set("tipDividends", formatSignedRub(summary.breakdown.dividends));
+        set("tipCommissions", formatSignedRub(-summary.breakdown.commissions));
+        set("tipTaxes", formatSignedRub(-summary.breakdown.taxes));
+
+        return section;
+      }
+
+      function renderCurrencyRow(summary) {
+        const row = document.createElement("section");
+        row.className = "currency-row";
+        row.innerHTML =
+          "<span class='currency-chevron'>»</span>" +
+          "<span class='currency-label'>Валюта</span>" +
+          "<span class='currency-value'>" + (summary.currencyText || formatRub(summary.currencyValue)) + "</span>";
+        return row;
       }
 
       function renderKeyValueTable(rows) {
         const table = document.createElement("table");
-        table.style.width = "100%";
-        table.style.borderCollapse = "collapse";
         for (const [k, v] of rows) {
           const tr = document.createElement("tr");
           const tdK = document.createElement("td");
           const tdV = document.createElement("td");
           tdK.textContent = k;
-          tdK.style.fontWeight = "600";
-          tdK.style.padding = "6px 8px";
-          tdK.style.borderBottom = "1px solid #eee";
+          tdK.style.fontWeight = "700";
           tdV.textContent = v;
-          tdV.style.padding = "6px 8px";
-          tdV.style.borderBottom = "1px solid #eee";
           tr.appendChild(tdK);
           tr.appendChild(tdV);
           table.appendChild(tr);
@@ -468,10 +831,11 @@
 
         for (const acc of accounts) {
           const card = document.createElement("div");
-          card.style.border = "1px solid #e6e6e6";
+          card.style.border = "1px solid #3f4762";
           card.style.borderRadius = "10px";
           card.style.padding = "10px 12px";
           card.style.marginBottom = "8px";
+          card.style.background = "#2d3346";
 
           const rows = [
             ["Название", acc.name || ""],
@@ -722,7 +1086,16 @@
           const btn = document.createElement("button");
           btn.type = "button";
           btn.className = "tab-btn";
-          btn.textContent = tab.label;
+          const icon = typeof tab.icon === "string" ? tab.icon : "";
+          if (icon) {
+            const iconEl = document.createElement("span");
+            iconEl.className = "tab-icon";
+            iconEl.textContent = icon;
+            btn.appendChild(iconEl);
+          }
+          const labelEl = document.createElement("span");
+          labelEl.textContent = tab.label;
+          btn.appendChild(labelEl);
           btn.setAttribute("role", "tab");
           btn.addEventListener("click", () => setActive(index));
           buttons.appendChild(btn);
@@ -745,142 +1118,346 @@
         out.appendChild(node);
       }
 
-      btn.addEventListener("click", async () => {
-        out.textContent = "Запрос...";
-        setLoading(true);
-        const token = tokenInput.value.trim();
+      function renderAnalyticsDashboard(body) {
+        const container = document.createElement("div");
+        const summary = buildSummary(body);
 
+        const common = document.createElement("div");
+        common.appendChild(renderKpis(summary));
+        common.appendChild(renderCurrencyRow(summary));
+
+        const diversification = document.createElement("div");
+        diversification.appendChild(
+          renderPieList(
+            "Структура по типам (pie)",
+            body.assetPie,
+            "label",
+            "valueText",
+            "percentText"
+          )
+        );
+        diversification.appendChild(renderAssetsBreakdown(body.assetBreakdown));
+
+        const dividends = document.createElement("div");
+        dividends.appendChild(
+          renderSimpleTable(
+            "Будущие выплаты (12 месяцев)",
+            body.incomeNext12,
+            ["month", "amount"]
+          )
+        );
+        dividends.appendChild(
+          renderSimpleTable(
+            "Полученные дивиденды (12 месяцев)",
+            body.receivedDividends12,
+            ["month", "amount"]
+          )
+        );
+
+        const growth = document.createElement("div");
+        const growthSection = document.createElement("div");
+        growthSection.className = "section";
+        const growthTitle = document.createElement("h3");
+        growthTitle.textContent = "Динамика";
+        growthSection.appendChild(growthTitle);
+        growthSection.appendChild(
+          renderKeyValueTable([
+            ["Прибыль", (summary.profitValue >= 0 ? "+" : "") + formatRub(summary.profitValue)],
+            ["Доходность", formatPct(summary.profitPct)],
+            ["Купонная доходность", formatPct(summary.yieldPct)],
+            ["Пассивный доход", formatPct(summary.passivePct)]
+          ])
+        );
+        growth.appendChild(growthSection);
+        growth.appendChild(
+          renderSimpleTable("Ближайшие события (7 дней)", body.upcomingEvents, [
+            "date",
+            "eventType",
+            "name",
+            "amount"
+          ])
+        );
+
+        const metrics = document.createElement("div");
+        metrics.appendChild(renderMetrics(body));
+        const formula = document.createElement("div");
+        formula.className = "section";
+        const formulaTitle = document.createElement("h3");
+        formulaTitle.textContent = "Детализация прибыли";
+        formula.appendChild(formulaTitle);
+        formula.appendChild(
+          renderKeyValueTable([
+            ["Текущая стоимость", formatSignedRub(summary.breakdown.currentValue)],
+            ["Результат сделок", formatSignedRub(summary.breakdown.tradesNet)],
+            ["Купоны", formatSignedRub(summary.breakdown.coupons)],
+            ["Дивиденды", formatSignedRub(summary.breakdown.dividends)],
+            ["Комиссии", formatSignedRub(-summary.breakdown.commissions)],
+            ["Налоги", formatSignedRub(-summary.breakdown.taxes)]
+          ])
+        );
+        metrics.appendChild(formula);
+
+        const report = document.createElement("div");
+        const reportWrap = document.createElement("div");
+        reportWrap.className = "section";
+        const reportTitle = document.createElement("h3");
+        reportTitle.textContent = "Отчет (сырой ответ API)";
+        reportWrap.appendChild(reportTitle);
+        reportWrap.appendChild(renderRawJson(body));
+        report.appendChild(reportWrap);
+
+        const bonds = document.createElement("div");
+        bonds.appendChild(
+          renderPieList(
+            "Облигации по компаниям",
+            body.bondCompanies,
+            "name",
+            "valueText",
+            "percentText"
+          )
+        );
+        if (body.bondCompaniesCount) {
+          const count = document.createElement("div");
+          count.className = "hint";
+          count.textContent = body.bondCompaniesCount;
+          bonds.appendChild(count);
+        }
+        bonds.appendChild(
+          renderSimpleTable(
+            "График погашений (12 месяцев)",
+            body.redemptionsNext12,
+            ["month", "amount"]
+          )
+        );
+        bonds.appendChild(renderRedemptions(body.redemptionsDetails));
+
+        container.appendChild(
+          renderTabs([
+            { label: "Общее", icon: "◼", content: common },
+            { label: "Диверсификация", icon: "◔", content: diversification },
+            { label: "Дивиденды", icon: "◉", content: dividends },
+            { label: "Рост", icon: "◢", content: growth },
+            { label: "Метрики", icon: "◫", content: metrics },
+            { label: "Отчет", icon: "▤", content: report },
+            { label: "Облигации", icon: "◍", content: bonds }
+          ])
+        );
+        showContent(container);
+      }
+
+      function restoreFromSharedCache() {
+        let hasAccount = false;
+        const accountsCache = readCache(CACHE_KEYS.accounts);
+        if (accountsCache && Array.isArray(accountsCache.accounts)) {
+          renderAccounts(accountsCache.accounts);
+          if (!accountInput.value && accountsCache.accountId) {
+            accountInput.value = accountsCache.accountId;
+            hasAccount = true;
+          }
+        }
+
+        const portfolioCache = readCache(CACHE_KEYS.portfolio);
+        if (!accountInput.value && portfolioCache?.accountId) {
+          accountInput.value = portfolioCache.accountId;
+          hasAccount = true;
+        }
+
+        hasAccount = hasAccount || Boolean(accountInput.value.trim());
+        analyzeBtn.disabled = !accountInput.value.trim();
+        return hasAccount;
+      }
+
+      function restoreAnalyticsCache() {
+        const analyticsCache = readCache(CACHE_KEYS.analytics);
+        if (!analyticsCache || typeof analyticsCache !== "object" || !analyticsCache.body) {
+          return false;
+        }
+
+        const cachedAccountId =
+          typeof analyticsCache.accountId === "string" ? analyticsCache.accountId : "";
+        const currentAccountId = accountInput.value.trim();
+        if (cachedAccountId && currentAccountId && cachedAccountId !== currentAccountId) {
+          return false;
+        }
+
+        if (!currentAccountId && cachedAccountId) {
+          accountInput.value = cachedAccountId;
+          analyzeBtn.disabled = false;
+        }
+
+        renderAnalyticsDashboard(analyticsCache.body);
+        setStatus("Показаны данные аналитики из кэша");
+        return true;
+      }
+
+      async function loadAccounts(options = {}) {
+        const { silent = false } = options;
+        const token = tokenInput.value.trim();
+        if (!token) {
+          if (!silent) setStatus("Введите токен");
+          return false;
+        }
+
+        if (!silent) {
+          out.textContent = "Запрос...";
+          setStatus("Загрузка счетов...");
+        }
+
+        setLoading(true);
         try {
           const res = await fetch("/api/accounts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token }),
+            body: JSON.stringify({ token })
           });
           const body = await res.json();
           if (res.ok && body && Array.isArray(body.accounts)) {
             showContent(renderAccountsPretty(body.accounts));
             renderAccounts(body.accounts);
-          } else {
-            showContent(renderRawJson(body));
+            if (!silent) setStatus("Счета загружены");
+            return true;
           }
+          showContent(renderRawJson(body));
+          if (!silent) setStatus("Не удалось загрузить счета");
         } catch (err) {
           out.textContent = String(err);
+          if (!silent) setStatus("Сетевая ошибка при загрузке счетов");
         } finally {
           setLoading(false);
         }
-      });
+        return false;
+      }
 
-      analyzeBtn.addEventListener("click", async () => {
-        out.textContent = "Запрос...";
-        setLoading(true);
+      async function loadAnalytics(options = {}) {
+        const { silent = false } = options;
         const token = tokenInput.value.trim();
-        const accountId = accountInput.value.trim();
+        let accountId = accountInput.value.trim();
 
+        if (!token) {
+          if (!silent) setStatus("Введите токен");
+          return false;
+        }
+
+        if (!accountId) {
+          const loaded = await loadAccounts({ silent: true });
+          if (!loaded || !accountInput.value.trim()) {
+            if (!silent) setStatus("Выберите счет");
+            return false;
+          }
+          accountId = accountInput.value.trim();
+        }
+
+        if (!silent) {
+          out.textContent = "Запрос...";
+          setStatus("Загрузка аналитики...");
+        }
+
+        setLoading(true);
         try {
           const res = await fetch("/api/analytics", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token, accountId }),
+            body: JSON.stringify({ token, accountId })
           });
           const body = await res.json();
           if (res.ok && body) {
-            const container = document.createElement("div");
-            const overview = document.createElement("div");
-            overview.appendChild(renderMetrics(body));
-            overview.appendChild(
-              renderPieList(
-                "Структура по типам (pie)",
-                body.assetPie,
-                "label",
-                "valueText",
-                "percentText"
-              )
-            );
-            overview.appendChild(renderAssetsBreakdown(body.assetBreakdown));
-
-            const bonds = document.createElement("div");
-            bonds.appendChild(
-              renderPieList(
-                "Облигации по компаниям",
-                body.bondCompanies,
-                "name",
-                "valueText",
-                "percentText"
-              )
-            );
-            if (body.bondCompaniesCount) {
-              const count = document.createElement("div");
-              count.className = "hint";
-              count.textContent = body.bondCompaniesCount;
-              bonds.appendChild(count);
-            }
-
-            const income = document.createElement("div");
-            income.appendChild(
-              renderSimpleTable(
-                "Купоны/дивиденды по месяцам (12 месяцев)",
-                body.incomeNext12,
-                ["month", "amount"]
-              )
-            );
-            income.appendChild(
-              renderSimpleTable(
-                "График погашений (12 месяцев)",
-                body.redemptionsNext12,
-                ["month", "amount"]
-              )
-            );
-            income.appendChild(renderRedemptions(body.redemptionsDetails));
-
-            container.appendChild(
-              renderTabs([
-                { label: "Overview", content: overview },
-                { label: "Income", content: income },
-                { label: "Bonds", content: bonds },
-              ])
-            );
-            showContent(container);
-          } else {
-            showContent(renderRawJson(body));
+            renderAnalyticsDashboard(body);
+            writeCache(CACHE_KEYS.analytics, {
+              body,
+              accountId,
+              updatedAt: Date.now()
+            });
+            syncAccountInSharedCache(accountId);
+            if (!silent) setStatus("Аналитика обновлена");
+            return true;
           }
+          showContent(renderRawJson(body));
+          if (!silent) setStatus("Не удалось получить аналитику");
         } catch (err) {
           out.textContent = String(err);
+          if (!silent) setStatus("Сетевая ошибка при загрузке аналитики");
         } finally {
           setLoading(false);
         }
+
+        return false;
+      }
+
+      loadBtn.addEventListener("click", () => {
+        void loadAccounts();
+      });
+
+      analyzeBtn.addEventListener("click", () => {
+        void loadAnalytics();
       });
 
       refreshCacheBtn.addEventListener("click", async () => {
-        nameProgressEl.textContent = "Сбрасываю кэш...";
+        setStatus("Сбрасываю кэш...");
         refreshCacheBtn.disabled = true;
         try {
           await fetch("/api/cache/refresh", { method: "POST" });
-          nameProgressEl.textContent = "Кэш очищен";
+          setStatus("Кэш очищен");
         } catch {
-          nameProgressEl.textContent = "Ошибка сброса кэша";
+          setStatus("Ошибка сброса кэша");
         } finally {
           refreshCacheBtn.disabled = false;
         }
       });
 
       refreshNamesBtn.addEventListener("click", async () => {
-        nameProgressEl.textContent = "Обновляю названия...";
+        setStatus("Обновляю названия...");
         refreshNamesBtn.disabled = true;
         try {
           const res = await fetch("/api/names/refresh", { method: "POST" });
           if (res.ok) {
             const data = await res.json();
-            nameProgressEl.textContent =
-              "Обновлено: " + (data.updated || 0);
+            setStatus("Обновлено: " + (data.updated || 0));
           } else {
-            nameProgressEl.textContent = "Ошибка обновления названий";
+            setStatus("Ошибка обновления названий");
           }
         } catch {
-          nameProgressEl.textContent = "Ошибка обновления названий";
+          setStatus("Ошибка обновления названий");
         } finally {
           refreshNamesBtn.disabled = false;
         }
       });
+
+      async function bootstrap() {
+        const savedToken = getSavedToken();
+        if (savedToken) {
+          tokenInput.value = savedToken;
+          saveSessionToken(savedToken);
+        }
+
+        setControlsVisible(false);
+        const hasAccount = restoreFromSharedCache();
+        const hasCachedAnalytics = restoreAnalyticsCache();
+        if (hasCachedAnalytics) return;
+
+        if (!tokenInput.value.trim()) {
+          setStatus("Введите токен для загрузки аналитики");
+          return;
+        }
+
+        if (hasAccount) {
+          setStatus("Загружаю аналитику...");
+          const ok = await loadAnalytics({ silent: true });
+          setStatus(ok ? "Аналитика обновлена" : "Не удалось загрузить аналитику");
+          return;
+        }
+
+        setStatus("Загружаю счета...");
+        const loaded = await loadAccounts({ silent: true });
+        if (!loaded || !accountInput.value.trim()) {
+          setStatus("Выберите счет и нажмите «Аналитика»");
+          return;
+        }
+
+        const ok = await loadAnalytics({ silent: true });
+        setStatus(ok ? "Аналитика обновлена" : "Не удалось загрузить аналитику");
+      }
+
+      bootstrap();
     </script>
   </body>
 </html>`;

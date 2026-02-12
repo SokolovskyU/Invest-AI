@@ -193,19 +193,34 @@ export function renderHomePage(): string {
         height: calc(100% - 52px);
       }
       .donut {
-        width: min(420px, 88%);
+        width: min(460px, 92%);
         aspect-ratio: 1;
         border-radius: 50%;
         position: relative;
-        border: 1px dashed #56607a;
+        border: 1px solid #4a5574;
+        box-shadow:
+          0 18px 38px rgba(0, 0, 0, 0.34),
+          inset 0 0 0 1px rgba(129, 147, 191, 0.2);
+        transform: translateZ(0);
+        image-rendering: auto;
       }
       .donut::before {
         content: "";
         position: absolute;
-        inset: 56px;
+        inset: 18%;
         border-radius: 50%;
         background: var(--panel);
-        border: 1px dashed #667190;
+        border: 1px solid #5a6688;
+        box-shadow: inset 0 0 24px rgba(7, 11, 20, 0.45);
+      }
+      .donut::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        pointer-events: none;
+        background: radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0) 48%);
+        opacity: 0.45;
       }
       .donut-tooltip {
         position: fixed;
@@ -814,8 +829,15 @@ export function renderHomePage(): string {
         futureSeries: [],
         dividendSeries: [],
         upcomingEvents: [],
+        donutSlices: [],
+        donutSpanByType: {},
+        donutRowsByType: {},
+        donutAnimRaf: 0,
         movers: { up: [], down: [] },
-        savedToken: localStorage.getItem("tinvest_token") || "",
+        savedToken:
+          localStorage.getItem("tinvest_token") ||
+          sessionStorage.getItem("tinvest_token_session") ||
+          "",
         portfolioTotalText: "-",
         portfolioTotalValue: 0,
         investedTotal: 0,
@@ -829,12 +851,15 @@ export function renderHomePage(): string {
           commissions: 0,
           taxes: 0
         },
+        passiveIncomeTotal: 0,
+        passiveIncomeYieldPct: 0,
+        passiveIncomeBaseValue: 0,
         yieldPct: 0,
         hoveredAssetType: null
       };
 
       const CACHE_KEYS = {
-        portfolio: "home_portfolio_cache_v9",
+        portfolio: "home_portfolio_cache_v12",
         accounts: "home_accounts_cache_v1"
       };
 
@@ -893,8 +918,22 @@ export function renderHomePage(): string {
       }
 
       function parseNumberFromText(value) {
+        if (typeof value === "number") return Number.isFinite(value) ? value : 0;
         if (!value || typeof value !== "string") return 0;
-        const normalized = value.replace(/[^0-9,.-]/g, "").replace(/,(?=\d{1,2}$)/, ".").replace(/,/g, "");
+        const prepared = value
+          .replace(/\u00A0|\u202F/g, " ")
+          .replace(/[\u2212\u2013\u2014]/g, "-");
+        const cleaned = prepared.replace(/[^0-9,.\-]/g, "");
+        if (!cleaned) return 0;
+        const lastComma = cleaned.lastIndexOf(",");
+        const lastDot = cleaned.lastIndexOf(".");
+        let normalized;
+        if (lastComma > lastDot) {
+          normalized = cleaned.replace(/\./g, "").replace(",", ".");
+        } else {
+          normalized = cleaned.replace(/,/g, "");
+        }
+        normalized = normalized.replace(/(?!^)-/g, "");
         const n = Number(normalized);
         return Number.isFinite(n) ? n : 0;
       }
@@ -913,6 +952,14 @@ export function renderHomePage(): string {
           localStorage.setItem(key, JSON.stringify(value));
         } catch {
           // ignore storage errors
+        }
+      }
+
+      function saveSessionToken(token) {
+        if (token) {
+          sessionStorage.setItem("tinvest_token_session", token);
+        } else {
+          sessionStorage.removeItem("tinvest_token_session");
         }
       }
 
@@ -993,7 +1040,10 @@ export function renderHomePage(): string {
         return rows
           .map((row) => ({
             label: String(row?.month || ""),
-            value: parseNumberFromText(String(row?.amount || "0"))
+            value:
+              (typeof row?.value === "number" && Number.isFinite(row.value))
+                ? row.value
+                : parseNumberFromText(String(row?.amount || "0"))
           }))
           .filter((row) => Number.isFinite(row.value));
       }
@@ -1106,9 +1156,23 @@ export function renderHomePage(): string {
         const invested = state.investedTotal;
         const profit = state.profitTotal;
         const profitPct = state.profitPct;
-        const passiveYear = state.futureSeries.reduce((sum, row) => sum + row.value, 0);
-        const totalValue = state.portfolioTotalValue || state.assetRows.reduce((sum, row) => sum + row.amount, 0);
-        const passivePct = totalValue > 0 ? (passiveYear / totalValue) * 100 : 0;
+        const passiveYear =
+          Number.isFinite(state.passiveIncomeTotal) ? state.passiveIncomeTotal : 0;
+        const fallbackPassiveYear =
+          passiveYear > 0 ? passiveYear : state.futureSeries.reduce((sum, row) => sum + row.value, 0);
+        const fallbackBaseValue = state.assetRows
+          .filter((row) => row.type !== "currency")
+          .reduce((sum, row) => sum + row.amount, 0);
+        const passiveBase =
+          Number.isFinite(state.passiveIncomeBaseValue) && state.passiveIncomeBaseValue > 0
+            ? state.passiveIncomeBaseValue
+            : fallbackBaseValue;
+        const passivePct =
+          Number.isFinite(state.passiveIncomeYieldPct)
+            ? state.passiveIncomeYieldPct
+            : passiveBase > 0
+              ? (fallbackPassiveYear / passiveBase) * 100
+              : 0;
 
         document.getElementById("kpiTotal").textContent = totalText;
         document.getElementById("kpiInvested").textContent = formatRub(invested) + " \u0432\u043b\u043e\u0436\u0435\u043d\u043e";
@@ -1118,7 +1182,8 @@ export function renderHomePage(): string {
         document.getElementById("kpiYield").textContent = formatPct(state.yieldPct || 0);
         document.getElementById("kpiPassive").textContent = formatPct(passivePct);
         document.getElementById("kpiPassiveGrowth").textContent = formatPct(passivePct);
-        document.getElementById("kpiPassiveYear").textContent = formatRub(passiveYear) + " за 12 мес";
+        document.getElementById("kpiPassiveYear").textContent =
+          formatRub(fallbackPassiveYear) + " за 12 мес";
         tipCurrentValueEl.textContent = formatSignedRub(state.profitBreakdown.currentValue || 0);
         tipTradesNetEl.textContent = formatSignedRub(state.profitBreakdown.tradesNet || 0);
         tipCouponsEl.textContent = formatSignedRub(state.profitBreakdown.coupons || 0);
@@ -1127,22 +1192,181 @@ export function renderHomePage(): string {
         tipTaxesEl.textContent = formatSignedRub(-(state.profitBreakdown.taxes || 0));
       }
 
-      function applyDonut() {
-        if (!state.assetRows.length) {
+      function buildDonutSlices() {
+        const rows = state.assetRows
+          .filter((row) => Number.isFinite(row.amount) && row.amount > 0)
+          .map((row) => ({ row, amount: Math.max(0, Number(row.amount) || 0) }));
+        if (!rows.length) return [];
+
+        const totalAmount = rows.reduce((sum, item) => sum + item.amount, 0);
+        if (!(totalAmount > 0)) return [];
+
+        const minVisibleAngle = 1.6;
+        const draft = rows.map((item) => {
+          const actualSpan = (item.amount / totalAmount) * 360;
+          const visualSpan =
+            actualSpan > 0 && actualSpan < minVisibleAngle ? minVisibleAngle : actualSpan;
+          return {
+            row: item.row,
+            actualSpan,
+            visualSpan,
+            start: 0,
+            end: 0
+          };
+        });
+
+        const visualTotal = draft.reduce((sum, item) => sum + item.visualSpan, 0);
+        if (visualTotal > 360) {
+          const overflow = visualTotal - 360;
+          const adjustable = draft
+            .map((item, index) => ({ index, room: Math.max(0, item.visualSpan - minVisibleAngle) }))
+            .filter((item) => item.room > 0);
+          const totalRoom = adjustable.reduce((sum, item) => sum + item.room, 0);
+          if (totalRoom > 0) {
+            for (const item of adjustable) {
+              const cut = overflow * (item.room / totalRoom);
+              draft[item.index].visualSpan = Math.max(
+                minVisibleAngle,
+                draft[item.index].visualSpan - cut
+              );
+            }
+          }
+        }
+
+        let cursor = 0;
+        for (const item of draft) {
+          item.start = cursor;
+          cursor += item.visualSpan;
+          item.end = cursor;
+        }
+        if (draft.length) {
+          draft[draft.length - 1].end = 360;
+        }
+        return draft;
+      }
+
+      function buildTypeOrder(typeSet) {
+        const ordered = [];
+        for (const type of ASSET_ORDER) {
+          if (typeSet.has(type)) ordered.push(type);
+        }
+        for (const type of typeSet) {
+          if (!ordered.includes(type)) ordered.push(type);
+        }
+        return ordered;
+      }
+
+      function renderDonutSlices(slices) {
+        state.donutSlices = slices;
+        if (!slices.length) {
           donut.style.background = "conic-gradient(#4f5875 0deg 360deg)";
           return;
         }
-
-        const total = state.assetRows.reduce((sum, row) => sum + Math.max(0, row.share), 0) || 1;
-        let angle = 0;
-        const chunks = state.assetRows.map((row) => {
-          const value = Math.max(0, row.share);
-          const start = angle;
-          const end = angle + (value / total) * 360;
-          angle = end;
-          return row.color + " " + start.toFixed(2) + "deg " + end.toFixed(2) + "deg";
-        });
+        const chunks = slices.map((slice) =>
+          slice.row.color +
+          " " +
+          slice.start.toFixed(4) +
+          "deg " +
+          slice.end.toFixed(4) +
+          "deg"
+        );
         donut.style.background = "conic-gradient(" + chunks.join(", ") + ")";
+      }
+
+      function buildSlicesFromSpanMap(spanByType, rowsByType, typeOrder) {
+        const slices = [];
+        let cursor = 0;
+        for (const type of typeOrder) {
+          const span = Math.max(0, Number(spanByType[type]) || 0);
+          if (span <= 0.0001) continue;
+          const row = rowsByType[type];
+          if (!row) continue;
+          const start = cursor;
+          cursor += span;
+          slices.push({
+            row,
+            actualSpan: span,
+            visualSpan: span,
+            start,
+            end: cursor
+          });
+        }
+        if (slices.length) slices[slices.length - 1].end = 360;
+        return slices;
+      }
+
+      function applyDonut() {
+        const targetSlices = buildDonutSlices();
+        if (!targetSlices.length) {
+          if (state.donutAnimRaf) {
+            cancelAnimationFrame(state.donutAnimRaf);
+            state.donutAnimRaf = 0;
+          }
+          state.donutSpanByType = {};
+          state.donutRowsByType = {};
+          renderDonutSlices([]);
+          return;
+        }
+
+        const targetSpanByType = {};
+        const targetRowsByType = {};
+        for (const slice of targetSlices) {
+          const type = String(slice?.row?.type || "");
+          if (!type) continue;
+          targetSpanByType[type] = Math.max(0, slice.end - slice.start);
+          targetRowsByType[type] = slice.row;
+        }
+
+        const prevSpanByType = state.donutSpanByType || {};
+        const prevRowsByType = state.donutRowsByType || {};
+        const allTypes = new Set([
+          ...Object.keys(prevSpanByType),
+          ...Object.keys(targetSpanByType)
+        ]);
+        const typeOrder = buildTypeOrder(allTypes);
+
+        if (state.donutAnimRaf) {
+          cancelAnimationFrame(state.donutAnimRaf);
+          state.donutAnimRaf = 0;
+        }
+
+        const hasPrev = Object.keys(prevSpanByType).length > 0;
+        if (!hasPrev) {
+          state.donutSpanByType = targetSpanByType;
+          state.donutRowsByType = targetRowsByType;
+          renderDonutSlices(targetSlices);
+          return;
+        }
+
+        const durationMs = 520;
+        const startTs = performance.now();
+        const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+
+        const animateFrame = (ts) => {
+          const progress = Math.min(1, (ts - startTs) / durationMs);
+          const eased = easeOutCubic(progress);
+          const currentSpanByType = {};
+          for (const type of typeOrder) {
+            const fromSpan = Math.max(0, Number(prevSpanByType[type]) || 0);
+            const toSpan = Math.max(0, Number(targetSpanByType[type]) || 0);
+            currentSpanByType[type] = fromSpan + (toSpan - fromSpan) * eased;
+          }
+          const currentRowsByType = { ...prevRowsByType, ...targetRowsByType };
+          const currentSlices = buildSlicesFromSpanMap(currentSpanByType, currentRowsByType, typeOrder);
+          renderDonutSlices(currentSlices);
+
+          if (progress < 1) {
+            state.donutAnimRaf = requestAnimationFrame(animateFrame);
+            return;
+          }
+
+          state.donutAnimRaf = 0;
+          state.donutSpanByType = targetSpanByType;
+          state.donutRowsByType = targetRowsByType;
+          renderDonutSlices(targetSlices);
+        };
+
+        state.donutAnimRaf = requestAnimationFrame(animateFrame);
       }
 
       function setHoveredAssetType(type) {
@@ -1153,7 +1377,7 @@ export function renderHomePage(): string {
       }
 
       function resolveHoveredDonutAsset(clientX, clientY) {
-        if (!Array.isArray(state.assetRows) || !state.assetRows.length) return null;
+        if (!Array.isArray(state.donutSlices) || !state.donutSlices.length) return null;
         const rect = donut.getBoundingClientRect();
         const radius = rect.width / 2;
         const cx = rect.left + radius;
@@ -1161,23 +1385,17 @@ export function renderHomePage(): string {
         const dx = clientX - cx;
         const dy = clientY - cy;
         const distance = Math.sqrt(dx * dx + dy * dy);
-        const innerRadius = Math.max(0, radius - 56);
+        const innerRadius = radius * 0.64;
 
         if (distance < innerRadius || distance > radius) return null;
 
         let angle = Math.atan2(dy, dx) * (180 / Math.PI) + 90;
         if (angle < 0) angle += 360;
 
-        const total = state.assetRows.reduce((sum, row) => sum + Math.max(0, row.share), 0) || 1;
-        let cursor = 0;
-        for (const row of state.assetRows) {
-          const value = Math.max(0, row.share);
-          const span = (value / total) * 360;
-          const next = cursor + span;
-          if (angle >= cursor && angle <= next) {
-            return row;
+        for (const slice of state.donutSlices) {
+          if (angle >= slice.start && angle <= slice.end) {
+            return slice.row;
           }
-          cursor = next;
         }
         return null;
       }
@@ -1228,29 +1446,48 @@ export function renderHomePage(): string {
 
       function buildMovers() {
         const sortable = state.positionRows
-          .filter((row) =>
-            Number.isFinite(row.dayChangePct) &&
-            row.dayPriceAvailable &&
-            row.closePrice24h > 0 &&
-            row.currentPriceNow > 0
-          )
-          .map((row) => ({
-            name: row.name,
-            dayChangePct: row.dayChangePct,
-            dayChange: row.dayChange,
-            closePrice24h: row.closePrice24h,
-            currentPriceNow: row.currentPriceNow
-          }));
+          .map((row) => {
+            const closePrice24h = Number(row.closePrice24h) || 0;
+            const currentPriceNow = Number(row.currentPriceNow) || 0;
+            if (!(closePrice24h > 0 && currentPriceNow > 0)) return null;
 
-        state.movers.up = sortable
-          .filter((row) => row.dayChangePct > 0)
-          .sort((a, b) => b.dayChangePct - a.dayChangePct)
-          .slice(0, 5);
+            const dayChangeFromPrices = currentPriceNow - closePrice24h;
+            const dayChangePctFromPrices = closePrice24h !== 0
+              ? (dayChangeFromPrices / closePrice24h) * 100
+              : 0;
 
-        state.movers.down = sortable
-          .filter((row) => row.dayChangePct < 0)
-          .sort((a, b) => a.dayChangePct - b.dayChangePct)
-          .slice(0, 5);
+            const rowPct = Number(row.dayChangePct) || 0;
+            const rowChange = Number(row.dayChange) || 0;
+            const dayChangePct =
+              Math.abs(rowPct) > 0.000001 ? rowPct : dayChangePctFromPrices;
+            const dayChange =
+              Math.abs(rowChange) > 0.000001 ? rowChange : dayChangeFromPrices;
+
+            return {
+              name: row.name,
+              dayChangePct,
+              dayChange,
+              closePrice24h,
+              currentPriceNow
+            };
+          })
+          .filter((row) => Boolean(row));
+
+        const byGrowth = sortable
+          .slice()
+          .sort((a, b) => (b.dayChangePct - a.dayChangePct) || (b.dayChange - a.dayChange));
+        const byDecline = sortable
+          .slice()
+          .sort((a, b) => (a.dayChangePct - b.dayChangePct) || (a.dayChange - b.dayChange));
+
+        let up = byGrowth.filter((row) => row.dayChangePct > 0 || row.dayChange > 0).slice(0, 5);
+        let down = byDecline.filter((row) => row.dayChangePct < 0 || row.dayChange < 0).slice(0, 5);
+
+        if (!up.length) up = byGrowth.slice(0, 5);
+        if (!down.length) down = byDecline.slice(0, 5);
+
+        state.movers.up = up;
+        state.movers.down = down;
       }
 
       function renderMoverList(container, items, emptyText) {
@@ -1346,6 +1583,9 @@ export function renderHomePage(): string {
             commissions: Number(portfolioCache?.profitBreakdown?.commissions) || 0,
             taxes: Number(portfolioCache?.profitBreakdown?.taxes) || 0
           };
+          state.passiveIncomeTotal = Number(portfolioCache.passiveIncomeTotal) || 0;
+          state.passiveIncomeBaseValue = Number(portfolioCache.passiveIncomeBaseValue) || 0;
+          state.passiveIncomeYieldPct = Number(portfolioCache.passiveIncomeYieldPct) || 0;
           state.yieldPct = Number(portfolioCache.yieldPct) || 0;
 
           if (!accountInput.value && portfolioCache.accountId) {
@@ -1446,16 +1686,54 @@ export function renderHomePage(): string {
           if (analyticsRes.ok && analyticsBody) {
             state.assetRows = mapAssetRowsFromAnalytics(analyticsBody);
             state.yieldPct = parseNumberFromText(analyticsBody.yieldPct || "0");
-            state.profitTotal = parseNumberFromText(analyticsBody.profitRub || "0");
+            state.profitTotal =
+              (typeof analyticsBody.profitValue === "number" && Number.isFinite(analyticsBody.profitValue))
+                ? analyticsBody.profitValue
+                : parseNumberFromText(analyticsBody.profitRub || "0");
             state.profitPct = parseNumberFromText(analyticsBody.profitPct || "0");
             state.profitBreakdown = {
-              currentValue: parseNumberFromText(analyticsBody?.profitBreakdown?.currentValueRub || "0"),
-              tradesNet: parseNumberFromText(analyticsBody?.profitBreakdown?.tradesNetRub || "0"),
-              coupons: parseNumberFromText(analyticsBody?.profitBreakdown?.couponsRub || "0"),
-              dividends: parseNumberFromText(analyticsBody?.profitBreakdown?.dividendsRub || "0"),
-              commissions: Math.abs(parseNumberFromText(analyticsBody?.profitBreakdown?.commissionsRub || "0")),
-              taxes: Math.abs(parseNumberFromText(analyticsBody?.profitBreakdown?.taxesRub || "0"))
+              currentValue:
+                (typeof analyticsBody?.profitBreakdown?.currentValue === "number" &&
+                  Number.isFinite(analyticsBody.profitBreakdown.currentValue))
+                  ? analyticsBody.profitBreakdown.currentValue
+                  : parseNumberFromText(analyticsBody?.profitBreakdown?.currentValueRub || "0"),
+              tradesNet:
+                (typeof analyticsBody?.profitBreakdown?.tradesNet === "number" &&
+                  Number.isFinite(analyticsBody.profitBreakdown.tradesNet))
+                  ? analyticsBody.profitBreakdown.tradesNet
+                  : parseNumberFromText(analyticsBody?.profitBreakdown?.tradesNetRub || "0"),
+              coupons:
+                (typeof analyticsBody?.profitBreakdown?.coupons === "number" &&
+                  Number.isFinite(analyticsBody.profitBreakdown.coupons))
+                  ? analyticsBody.profitBreakdown.coupons
+                  : parseNumberFromText(analyticsBody?.profitBreakdown?.couponsRub || "0"),
+              dividends:
+                (typeof analyticsBody?.profitBreakdown?.dividends === "number" &&
+                  Number.isFinite(analyticsBody.profitBreakdown.dividends))
+                  ? analyticsBody.profitBreakdown.dividends
+                  : parseNumberFromText(analyticsBody?.profitBreakdown?.dividendsRub || "0"),
+              commissions:
+                (typeof analyticsBody?.profitBreakdown?.commissions === "number" &&
+                  Number.isFinite(analyticsBody.profitBreakdown.commissions))
+                  ? Math.abs(analyticsBody.profitBreakdown.commissions)
+                  : Math.abs(parseNumberFromText(analyticsBody?.profitBreakdown?.commissionsRub || "0")),
+              taxes:
+                (typeof analyticsBody?.profitBreakdown?.taxes === "number" &&
+                  Number.isFinite(analyticsBody.profitBreakdown.taxes))
+                  ? Math.abs(analyticsBody.profitBreakdown.taxes)
+                  : Math.abs(parseNumberFromText(analyticsBody?.profitBreakdown?.taxesRub || "0"))
             };
+            state.passiveIncomeTotal =
+              typeof analyticsBody?.passiveIncomeTotal === "number" &&
+              Number.isFinite(analyticsBody.passiveIncomeTotal)
+                ? analyticsBody.passiveIncomeTotal
+                : 0;
+            state.passiveIncomeBaseValue =
+              typeof analyticsBody?.passiveIncomeBaseValue === "number" &&
+              Number.isFinite(analyticsBody.passiveIncomeBaseValue)
+                ? analyticsBody.passiveIncomeBaseValue
+                : 0;
+            state.passiveIncomeYieldPct = parseNumberFromText(analyticsBody.passiveIncomeYieldPct || "0");
             const totalFromAnalytics = parseNumberFromText(analyticsBody.total || "");
             if (totalFromAnalytics > 0) {
               state.portfolioTotalValue = totalFromAnalytics;
@@ -1469,6 +1747,9 @@ export function renderHomePage(): string {
           } else {
             state.assetRows = mapAssetRowsFromPositions(state.positionRows);
             state.yieldPct = 0;
+            state.passiveIncomeTotal = 0;
+            state.passiveIncomeBaseValue = 0;
+            state.passiveIncomeYieldPct = 0;
             if (!state.futureSeries.length) state.futureSeries = [];
             if (!state.dividendSeries.length) state.dividendSeries = [];
             if (!state.upcomingEvents.length) state.upcomingEvents = [];
@@ -1497,6 +1778,9 @@ export function renderHomePage(): string {
             profitPct: state.profitPct,
             profitBreakdown: state.profitBreakdown,
             yieldPct: state.yieldPct,
+            passiveIncomeTotal: state.passiveIncomeTotal,
+            passiveIncomeBaseValue: state.passiveIncomeBaseValue,
+            passiveIncomeYieldPct: state.passiveIncomeYieldPct,
             accountId,
             updatedAt: Date.now()
           });
@@ -1550,11 +1834,17 @@ export function renderHomePage(): string {
         const token = tokenInput.value.trim();
         if (!token) {
           localStorage.removeItem("tinvest_token");
+          saveSessionToken("");
           setStatus("\u0422\u043e\u043a\u0435\u043d \u0443\u0434\u0430\u043b\u0435\u043d \u0438\u0437 localStorage");
           return;
         }
+        saveSessionToken(token);
         localStorage.setItem("tinvest_token", token);
         setStatus("\u0422\u043e\u043a\u0435\u043d \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d \u0432 localStorage");
+      });
+
+      tokenInput.addEventListener("input", () => {
+        saveSessionToken(tokenInput.value.trim());
       });
 
       loadBtn.addEventListener("click", () => loadAccounts());

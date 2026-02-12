@@ -32,6 +32,19 @@ export type OperationsServiceClient = grpc.Client & {
     metadata: grpc.Metadata,
     callback: (err: grpc.ServiceError | null, response: unknown) => void
   ) => void;
+  GetOperationsByCursor: (
+    request: {
+      account_id: string;
+      from?: { seconds: string | number; nanos: number };
+      to?: { seconds: string | number; nanos: number };
+      cursor?: string;
+      limit?: number;
+      state?: string;
+      without_trades?: boolean;
+    },
+    metadata: grpc.Metadata,
+    callback: (err: grpc.ServiceError | null, response: unknown) => void
+  ) => void;
 };
 
 export type InstrumentsServiceClient = grpc.Client & {

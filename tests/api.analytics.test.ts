@@ -45,12 +45,33 @@ const mockOperationsClient = {
         {
           operation_type: "OPERATION_TYPE_BUY",
           payment: { units: "-1000", nano: 0, currency: "RUB" },
+          commission: { units: "10", nano: 0, currency: "RUB" },
           date: { seconds: 1700000000 },
+        },
+        {
+          operation_type: "OPERATION_TYPE_BROKER_FEE",
+          payment: { units: "-10", nano: 0, currency: "RUB" },
+          date: { seconds: 1700000100 },
         },
         {
           operation_type: "OPERATION_TYPE_DIVIDEND",
           payment: { units: "200", nano: 0, currency: "RUB" },
           date: { seconds: 1705000000 },
+        },
+        {
+          operation_type: "OPERATION_TYPE_DIVIDEND_TAX",
+          payment: { units: "-20", nano: 0, currency: "RUB" },
+          date: { seconds: 1705000100 },
+        },
+        {
+          operation_type: "OPERATION_TYPE_TAX",
+          payment: { units: "-26", nano: 0, currency: "RUB" },
+          date: { seconds: 1705000200 },
+        },
+        {
+          operation_type: "OPERATION_TYPE_TAX_CORRECTION",
+          payment: { units: "6", nano: 0, currency: "RUB" },
+          date: { seconds: 1705000300 },
         },
       ],
     });
@@ -89,6 +110,21 @@ const mockInstrumentsClient = {
 const mockMarketDataClient = {
   GetLastPrices: (_req: any, _md: any, cb: any) => cb(null, { last_prices: [] }),
   GetClosePrices: (_req: any, _md: any, cb: any) => cb(null, { close_prices: [] }),
+  GetCandles: (_req: any, _md: any, cb: any) =>
+    cb(null, {
+      candles: [
+        {
+          close: { units: "540", nano: 0 },
+          time: { seconds: 1700000000, nanos: 0 },
+          is_complete: true,
+        },
+        {
+          close: { units: "550", nano: 0 },
+          time: { seconds: 1700086400, nanos: 0 },
+          is_complete: true,
+        },
+      ],
+    }),
 };
 
 registerRoutes(app, {
@@ -127,10 +163,24 @@ async function run() {
   assert.ok(body.incomeNext12);
   assert.ok(body.redemptionsNext12);
   assert.ok(body.redemptionsDetails);
+  assert.equal(body.profitBreakdown.commissions, 10);
+  assert.equal(body.profitBreakdown.taxes, 40);
 
   // Ensure technical codes are not exposed as names
   const hasCodeName = JSON.stringify(body).includes("TCS00A10D1W2");
   assert.equal(hasCodeName, false);
+
+  const portfolioRes = await fetch(`http://127.0.0.1:${port}/api/portfolio`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ accountId: "acc-1" }),
+  });
+  assert.equal(portfolioRes.status, 200);
+  const portfolioBody = await portfolioRes.json();
+  assert.ok(Array.isArray(portfolioBody.positions));
+  assert.equal(portfolioBody.positions.length, 1);
+  assert.equal(portfolioBody.positions[0].dayPriceAvailable, true);
+  assert.equal(portfolioBody.positions[0].dayChangePct, "1,85%");
 
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }

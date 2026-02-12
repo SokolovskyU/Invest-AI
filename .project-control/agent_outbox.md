@@ -85,3 +85,50 @@
   - client state/cache updated for new breakdown fields,
   - cache key bumped to `home_portfolio_cache_v8`.
 - Validation: `npm test` passed (`check-project-control`, `check-encoding`, tests).
+
+### 2026-02-12 19:10 - Fix profit and future payouts using full operations history
+- Root cause: /api/analytics used GetOperations and was capped at 1000 operations, causing distorted profit and payout filters.
+- Updated src/grpc.ts: added GetOperationsByCursor typing for operations client.
+- Updated src/routes.ts (/api/analytics):
+  - switched operations loading to paginated GetOperationsByCursor (limit 1000, cursor loop),
+  - kept fallback to GetOperations if cursor method is unavailable,
+  - profit now uses complete operation history (trades/income/fees/taxes).
+- Verified with live account request: profitRub is 41 795.23 RUB; incomeNext12 total is 37 437.60 RUB.
+- Validation: npm test passed.
+
+### 2026-02-12 22:13 - Fix BOM handling for .project-control/data.json
+- Updated scripts/check-project-control.ts to strip UTF-8 BOM before JSON.parse.
+- Added auto-heal: when BOM is detected, file is rewritten without BOM.
+- Verified by forcing BOM into data.json and running npm run check:project-control (passes).
+- Validation: npm test passed.
+
+
+### 2026-02-12 22:18 - Guard against inflated profit values
+- Updated src/routes.ts: added deduplication of operations by stable key (id or composite) when collecting history via GetOperationsByCursor/fallback GetOperations.
+- Updated src/ui/homePage.ts: hardened parseNumberFromText for unicode minus (?, –, —) and mixed locale separators.
+- Bumped home cache key to home_portfolio_cache_v10 to drop stale inflated values from localStorage.
+- Validation: 
+pm test passed.
+
+
+### 2026-02-12 22:23 - Fix dead buttons on home page
+- Root cause: invalid TypeScript syntax leaked into browser script (let normalized: string;) inside enderHomePage() output, causing JS parse error and stopping all event handlers.
+- Updated src/ui/homePage.ts in parseNumberFromText():
+  - replaced let normalized: string; with valid JS let normalized;,
+  - normalized minus characters with unicode escapes ([\u2212\u2013\u2014]).
+- Validation: generated home script parses successfully (m.Script) and 
+pm test passes.
+
+
+### 2026-02-12 22:28 - Fix zero KPI breakdown/future payouts regression
+- Updated src/routes.ts:
+  - if GetOperationsByCursor throws, backend now falls back to GetOperations instead of zeroing operation-based metrics,
+  - added numeric analytics fields: profitValue, profitBreakdown.{currentValue,tradesNet,coupons,dividends,commissions,taxes},
+  - added numeric alue to incomeNext12 and eceivedDividends12.
+- Updated src/ui/homePage.ts:
+  - switched to numeric fields first (string parsing only as fallback),
+  - mapMonthSeries now uses ow.value when available,
+  - bumped cache key to home_portfolio_cache_v11.
+- Validation: /api/analytics returns non-zero numeric breakdown and future payouts; 
+pm test passed.
+
