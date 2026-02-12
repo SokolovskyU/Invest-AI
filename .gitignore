@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+build/
+coverage/
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local cache/temp files
+.cache/
+.temp/
+tmp/
+temp/
+
+# TypeScript / tooling
+*.tsbuildinfo
+
+# IDE/editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

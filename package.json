@@ -1,0 +1,25 @@
+{
+  "name": "tbank-invest-pet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "T-Bank Invest API pet project",
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "cli": "tsx src/index.ts",
+    "check:project-control": "tsx scripts/check-project-control.ts",
+    "check:encoding": "tsx scripts/check-encoding.ts",
+    "test": "npm run check:project-control && npm run check:encoding && tsx tests/utils.test.ts tests/api.analytics.test.ts tests/api.metrics.test.ts"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.12.2",
+    "@grpc/proto-loader": "^0.7.13",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.2",
+    "typescript": "^5.4.5"
+  }
+}
