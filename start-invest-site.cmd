@@ -12,6 +12,14 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo Building web app...
+call npm run web:build
+if errorlevel 1 (
+  echo Web build failed. Server startup aborted.
+  pause
+  exit /b 1
+)
+
 start "T-Invest Server" cmd /k "cd /d ""%PROJECT_DIR%"" && npm run dev"
 timeout /t 4 /nobreak >nul
 start "" "http://localhost:3000"

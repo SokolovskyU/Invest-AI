@@ -258,6 +258,68 @@
         font-size: 32px;
         font-weight: 700;
       }
+      .assets-section {
+        margin-top: 16px;
+      }
+      .assets-title {
+        margin: 0 0 10px;
+        font-size: 20px;
+        font-weight: 800;
+        color: #eef4ff;
+      }
+      .assets-table-wrap {
+        border: 1px solid #3f4762;
+        border-radius: 10px;
+        background: #2d3346;
+        overflow-x: auto;
+      }
+      .assets-table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 1180px;
+      }
+      .assets-table th,
+      .assets-table td {
+        padding: 10px 12px;
+      }
+      .assets-sort-btn {
+        width: 100%;
+        border: none;
+        background: transparent;
+        color: inherit;
+        text-align: left;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .assets-sort-btn:hover {
+        color: #dff0ff;
+      }
+      .assets-sort-btn.is-active {
+        color: #77d4ff;
+      }
+      .assets-sort-dir {
+        font-size: 11px;
+        opacity: 0.9;
+      }
+      .assets-name {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .assets-icon {
+        width: 18px;
+        text-align: center;
+        color: #8ec8ff;
+      }
+      .assets-total-row td {
+        font-weight: 800;
+        color: #f7fbff;
+        background: #31394f;
+      }
       .panel {
         margin-top: 20px;
         background: var(--panel);
@@ -452,7 +514,7 @@
         <datalist id="accounts"></datalist>
         <button id="load" class="load-btn" type="button">Счета</button>
         <button id="analyze" class="load-btn" type="button" disabled>Аналитика</button>
-        <button id="rememberBtn" class="secondary-btn" type="button">Запомнить токен</button>
+        <button id="rememberBtn" class="secondary-btn" type="button">Сохранить токен (сессия)</button>
       </div>
     </header>
 
@@ -473,13 +535,17 @@
 
     <script>
       const CACHE_KEYS = {
-        portfolio: "home_portfolio_cache_v11",
+        portfolio: "home_portfolio_cache_v14",
         accounts: "home_accounts_cache_v1",
         analytics: "analytics_page_cache_v1"
       };
+      const LEGACY_PORTFOLIO_CACHE_KEYS = [
+        "home_portfolio_cache_v13",
+        "home_portfolio_cache_v12",
+        "home_portfolio_cache_v11"
+      ];
 
       const TOKEN_KEYS = {
-        persistent: "tinvest_token",
         session: "tinvest_token_session"
       };
 
@@ -513,12 +579,29 @@
         }
       }
 
+      function readSharedPortfolioCache() {
+        const keys = [CACHE_KEYS.portfolio].concat(LEGACY_PORTFOLIO_CACHE_KEYS);
+        for (const key of keys) {
+          const value = readCache(key);
+          if (value && typeof value === "object") return value;
+        }
+        return null;
+      }
+
+      function isPortfolioCacheNewerThanAnalytics(analyticsCache, portfolioCache, accountId) {
+        if (!analyticsCache || !portfolioCache) return false;
+        const analyticsUpdatedAt = Number(analyticsCache?.updatedAt || 0);
+        const portfolioUpdatedAt = Number(portfolioCache?.updatedAt || 0);
+        if (!(portfolioUpdatedAt > 0 && analyticsUpdatedAt > 0)) return false;
+
+        const portfolioAccountId =
+          typeof portfolioCache?.accountId === "string" ? portfolioCache.accountId : "";
+        if (portfolioAccountId && accountId && portfolioAccountId !== accountId) return false;
+        return portfolioUpdatedAt > analyticsUpdatedAt;
+      }
+
       function getSavedToken() {
-        return (
-          localStorage.getItem(TOKEN_KEYS.persistent) ||
-          sessionStorage.getItem(TOKEN_KEYS.session) ||
-          ""
-        );
+        return sessionStorage.getItem(TOKEN_KEYS.session) || "";
       }
 
       function saveSessionToken(token) {
@@ -529,8 +612,48 @@
         }
       }
 
+      async function syncServerToken(rawToken) {
+        const token = String(rawToken || "").trim();
+        if (!token) {
+          await postJsonWithTimeout("/api/session/logout", {}, 10000);
+          return;
+        }
+        await postJsonWithTimeout("/api/session/token", { token }, 10000);
+      }
+
       function setStatus(text) {
         statusEl.textContent = text;
+      }
+
+      function withTimeoutResult(promise, timeoutMs) {
+        return Promise.race([
+          promise.then((value) => ({ timedOut: false, value })),
+          new Promise((resolve) =>
+            setTimeout(() => resolve({ timedOut: true, value: false }), timeoutMs)
+          )
+        ]);
+      }
+
+      async function postJsonWithTimeout(url, payload, timeoutMs = 15000) {
+        const controller = new AbortController();
+        const timerId = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            signal: controller.signal
+          });
+          let body = null;
+          try {
+            body = await res.json();
+          } catch {
+            body = null;
+          }
+          return { res, body };
+        } finally {
+          clearTimeout(timerId);
+        }
       }
 
       function setControlsVisible(isVisible) {
@@ -552,7 +675,7 @@
         const accounts = Array.isArray(accountsCache?.accounts) ? accountsCache.accounts : [];
         syncAccountsCache(accounts, normalizedAccountId);
 
-        const portfolioCache = readCache(CACHE_KEYS.portfolio);
+        const portfolioCache = readSharedPortfolioCache();
         if (portfolioCache && typeof portfolioCache === "object") {
           writeCache(CACHE_KEYS.portfolio, {
             ...portfolioCache,
@@ -578,15 +701,13 @@
 
       rememberBtn.addEventListener("click", () => {
         const token = tokenInput.value.trim();
-        if (!token) {
-          localStorage.removeItem(TOKEN_KEYS.persistent);
-          saveSessionToken("");
-          setStatus("Токен удален из browser storage");
-          return;
-        }
         saveSessionToken(token);
-        localStorage.setItem(TOKEN_KEYS.persistent, token);
-        setStatus("Токен сохранен в localStorage");
+        void syncServerToken(token).catch(() => undefined);
+        setStatus(
+          token
+            ? "Токен сохранен в sessionStorage"
+            : "Токен очищен в sessionStorage"
+        );
       });
 
       accountInput.addEventListener("input", () => {
@@ -768,6 +889,249 @@
           "<span class='currency-label'>Валюта</span>" +
           "<span class='currency-value'>" + (summary.currencyText || formatRub(summary.currencyValue)) + "</span>";
         return row;
+      }
+
+      function formatQuantityValue(value) {
+        return new Intl.NumberFormat("ru-RU", {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 4
+        }).format(value);
+      }
+
+      function normalizeMyAssets(body) {
+        const rawRows = Array.isArray(body?.myAssets) ? body.myAssets : [];
+        return rawRows.map((item, index) => {
+          const quantity = metricNumber(item?.quantity, item?.quantityText || "0");
+          const invested = metricNumber(item?.invested, item?.investedText || "0");
+          const currentValue = metricNumber(item?.currentValue, item?.currentValueText || "0");
+          const passiveIncome = metricNumber(item?.passiveIncome, item?.passiveIncomeText || "0");
+          const assetYield = metricNumber(item?.assetYield, item?.assetYieldText || "0");
+          const profitValue = metricNumber(item?.profitValue, item?.profitText || "0");
+          const yieldPct = metricNumber(item?.yieldPct, item?.yieldPctText || "0");
+          const portfolioSharePct = metricNumber(
+            item?.portfolioSharePct,
+            item?.portfolioSharePctText || "0"
+          );
+          return {
+            id: item?.id || "asset-" + String(index),
+            icon: typeof item?.icon === "string" && item.icon.trim() ? item.icon.trim() : "•",
+            name:
+              typeof item?.name === "string" && item.name.trim()
+                ? item.name.trim()
+                : "Название недоступно",
+            quantity,
+            quantityText: item?.quantityText || formatQuantityValue(quantity),
+            invested,
+            investedText: item?.investedText || formatRub(invested),
+            currentValue,
+            currentValueText: item?.currentValueText || formatRub(currentValue),
+            passiveIncome,
+            passiveIncomeText: item?.passiveIncomeText || formatRub(passiveIncome),
+            assetYield,
+            assetYieldText: item?.assetYieldText || formatRub(assetYield),
+            profitValue,
+            profitText: item?.profitText || formatRub(profitValue),
+            yieldPct,
+            yieldPctText: item?.yieldPctText || formatPct(yieldPct),
+            portfolioSharePct,
+            portfolioSharePctText: item?.portfolioSharePctText || formatPct(portfolioSharePct)
+          };
+        });
+      }
+
+      function computeMyAssetsTotals(body, rows) {
+        const totals = rows.reduce(
+          (acc, row) => {
+            acc.quantity += row.quantity;
+            acc.invested += row.invested;
+            acc.currentValue += row.currentValue;
+            acc.passiveIncome += row.passiveIncome;
+            acc.assetYield += row.assetYield;
+            acc.profitValue += row.profitValue;
+            acc.portfolioSharePct += row.portfolioSharePct;
+            return acc;
+          },
+          {
+            quantity: 0,
+            invested: 0,
+            currentValue: 0,
+            passiveIncome: 0,
+            assetYield: 0,
+            profitValue: 0,
+            portfolioSharePct: 0
+          }
+        );
+        const source = body?.myAssetsTotals || {};
+        const yieldPct = totals.invested !== 0 ? (totals.profitValue / totals.invested) * 100 : 0;
+        return {
+          quantityText: source.quantityText || formatQuantityValue(totals.quantity),
+          investedText: source.investedText || formatRub(totals.invested),
+          currentValueText: source.currentValueText || formatRub(totals.currentValue),
+          passiveIncomeText: source.passiveIncomeText || formatRub(totals.passiveIncome),
+          assetYieldText: source.assetYieldText || formatRub(totals.assetYield),
+          profitText: source.profitText || formatRub(totals.profitValue),
+          yieldPctText: source.yieldPctText || formatPct(yieldPct),
+          portfolioSharePctText: source.portfolioSharePctText || formatPct(totals.portfolioSharePct)
+        };
+      }
+
+      function renderMyAssetsSection(body) {
+        const section = document.createElement("section");
+        section.className = "assets-section";
+        const title = document.createElement("h3");
+        title.className = "assets-title";
+        title.textContent = "Мои активы";
+        section.appendChild(title);
+
+        const rows = normalizeMyAssets(body);
+        if (!rows.length) {
+          const empty = document.createElement("div");
+          empty.textContent = "Нет данных.";
+          section.appendChild(empty);
+          return section;
+        }
+
+        const columns = [
+          { key: "name", label: "Актив", numeric: false, textKey: "" },
+          { key: "quantity", label: "Количество", numeric: true, textKey: "quantityText" },
+          { key: "invested", label: "Вложено", numeric: true, textKey: "investedText" },
+          { key: "currentValue", label: "Текущая стоимость", numeric: true, textKey: "currentValueText" },
+          { key: "passiveIncome", label: "Дивиденды/купоны", numeric: true, textKey: "passiveIncomeText" },
+          { key: "assetYield", label: "Доходность актива", numeric: true, textKey: "assetYieldText" },
+          { key: "profitValue", label: "Прибыль актива", numeric: true, textKey: "profitText" },
+          { key: "yieldPct", label: "Доходность, %", numeric: true, textKey: "yieldPctText" },
+          {
+            key: "portfolioSharePct",
+            label: "Доля в портфеле, %",
+            numeric: true,
+            textKey: "portfolioSharePctText"
+          }
+        ];
+
+        let sortKey = "currentValue";
+        let sortDirection = "desc";
+
+        const tableWrap = document.createElement("div");
+        tableWrap.className = "assets-table-wrap";
+        const table = document.createElement("table");
+        table.className = "assets-table";
+        const thead = document.createElement("thead");
+        const headRow = document.createElement("tr");
+        const headerButtons = new Map();
+
+        for (const column of columns) {
+          const th = document.createElement("th");
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "assets-sort-btn";
+          button.setAttribute("data-key", column.key);
+          button.innerHTML = "<span>" + column.label + "</span><span class='assets-sort-dir'>↕</span>";
+          button.addEventListener("click", () => {
+            if (sortKey === column.key) {
+              sortDirection = sortDirection === "desc" ? "asc" : "desc";
+            } else {
+              sortKey = column.key;
+              sortDirection = "desc";
+            }
+            renderBody();
+            updateHeaders();
+          });
+          headerButtons.set(column.key, button);
+          th.appendChild(button);
+          headRow.appendChild(th);
+        }
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement("tbody");
+        table.appendChild(tbody);
+        const tfoot = document.createElement("tfoot");
+        table.appendChild(tfoot);
+
+        function sortedRows() {
+          const sorted = rows.slice();
+          sorted.sort((a, b) => {
+            if (sortKey === "name") {
+              const byName = a.name.localeCompare(b.name, "ru", { sensitivity: "base" });
+              if (byName !== 0) return sortDirection === "desc" ? -byName : byName;
+              return b.currentValue - a.currentValue;
+            }
+            const left = Number(a[sortKey]) || 0;
+            const right = Number(b[sortKey]) || 0;
+            if (left === right) {
+              return a.name.localeCompare(b.name, "ru", { sensitivity: "base" });
+            }
+            return sortDirection === "desc" ? right - left : left - right;
+          });
+          return sorted;
+        }
+
+        function updateHeaders() {
+          for (const column of columns) {
+            const btn = headerButtons.get(column.key);
+            if (!btn) continue;
+            const active = column.key === sortKey;
+            btn.classList.toggle("is-active", active);
+            const dir = active ? (sortDirection === "desc" ? "▼" : "▲") : "↕";
+            btn.innerHTML =
+              "<span>" + column.label + "</span><span class='assets-sort-dir'>" + dir + "</span>";
+          }
+        }
+
+        function renderBody() {
+          tbody.innerHTML = "";
+          const sorted = sortedRows();
+          for (const row of sorted) {
+            const tr = document.createElement("tr");
+            for (const column of columns) {
+              const td = document.createElement("td");
+              if (column.key === "name") {
+                const name = document.createElement("span");
+                name.className = "assets-name";
+                const icon = document.createElement("span");
+                icon.className = "assets-icon";
+                icon.textContent = row.icon;
+                const text = document.createElement("span");
+                text.textContent = row.name;
+                name.appendChild(icon);
+                name.appendChild(text);
+                td.appendChild(name);
+              } else {
+                td.textContent = row[column.textKey];
+              }
+              tr.appendChild(td);
+            }
+            tbody.appendChild(tr);
+          }
+
+          const totals = computeMyAssetsTotals(body, rows);
+          tfoot.innerHTML = "";
+          const totalRow = document.createElement("tr");
+          totalRow.className = "assets-total-row";
+          const totalValues = [
+            "Всего",
+            totals.quantityText,
+            totals.investedText,
+            totals.currentValueText,
+            totals.passiveIncomeText,
+            totals.assetYieldText,
+            totals.profitText,
+            totals.yieldPctText,
+            totals.portfolioSharePctText
+          ];
+          for (const value of totalValues) {
+            const td = document.createElement("td");
+            td.textContent = value;
+            totalRow.appendChild(td);
+          }
+          tfoot.appendChild(totalRow);
+        }
+
+        renderBody();
+        updateHeaders();
+        tableWrap.appendChild(table);
+        section.appendChild(tableWrap);
+        return section;
       }
 
       function renderKeyValueTable(rows) {
@@ -1125,6 +1489,7 @@
         const common = document.createElement("div");
         common.appendChild(renderKpis(summary));
         common.appendChild(renderCurrencyRow(summary));
+        common.appendChild(renderMyAssetsSection(body));
 
         const diversification = document.createElement("div");
         diversification.appendChild(
@@ -1256,7 +1621,7 @@
           }
         }
 
-        const portfolioCache = readCache(CACHE_KEYS.portfolio);
+        const portfolioCache = readSharedPortfolioCache();
         if (!accountInput.value && portfolioCache?.accountId) {
           accountInput.value = portfolioCache.accountId;
           hasAccount = true;
@@ -1264,10 +1629,10 @@
 
         hasAccount = hasAccount || Boolean(accountInput.value.trim());
         analyzeBtn.disabled = !accountInput.value.trim();
-        return hasAccount;
+        return { hasAccount, portfolioCache };
       }
 
-      function restoreAnalyticsCache() {
+      function restoreAnalyticsCache(portfolioCache) {
         const analyticsCache = readCache(CACHE_KEYS.analytics);
         if (!analyticsCache || typeof analyticsCache !== "object" || !analyticsCache.body) {
           return false;
@@ -1285,6 +1650,11 @@
           analyzeBtn.disabled = false;
         }
 
+        const activeAccountId = accountInput.value.trim() || cachedAccountId;
+        if (isPortfolioCacheNewerThanAnalytics(analyticsCache, portfolioCache, activeAccountId)) {
+          return false;
+        }
+
         renderAnalyticsDashboard(analyticsCache.body);
         setStatus("Показаны данные аналитики из кэша");
         return true;
@@ -1293,8 +1663,10 @@
       async function loadAccounts(options = {}) {
         const { silent = false } = options;
         const token = tokenInput.value.trim();
-        if (!token) {
-          if (!silent) setStatus("Введите токен");
+        try {
+          await syncServerToken(token);
+        } catch {
+          if (!silent) setStatus("Ошибка синхронизации токена с серверной сессией");
           return false;
         }
 
@@ -1305,12 +1677,7 @@
 
         setLoading(true);
         try {
-          const res = await fetch("/api/accounts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token })
-          });
-          const body = await res.json();
+          const { res, body } = await postJsonWithTimeout("/api/accounts", {}, 12000);
           if (res.ok && body && Array.isArray(body.accounts)) {
             showContent(renderAccountsPretty(body.accounts));
             renderAccounts(body.accounts);
@@ -1332,9 +1699,10 @@
         const { silent = false } = options;
         const token = tokenInput.value.trim();
         let accountId = accountInput.value.trim();
-
-        if (!token) {
-          if (!silent) setStatus("Введите токен");
+        try {
+          await syncServerToken(token);
+        } catch {
+          if (!silent) setStatus("Ошибка синхронизации токена с серверной сессией");
           return false;
         }
 
@@ -1354,12 +1722,11 @@
 
         setLoading(true);
         try {
-          const res = await fetch("/api/analytics", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token, accountId })
-          });
-          const body = await res.json();
+          const { res, body } = await postJsonWithTimeout(
+            "/api/analytics",
+            { accountId },
+            20000
+          );
           if (res.ok && body) {
             renderAnalyticsDashboard(body);
             writeCache(CACHE_KEYS.analytics, {
@@ -1389,6 +1756,21 @@
 
       analyzeBtn.addEventListener("click", () => {
         void loadAnalytics();
+      });
+
+      window.addEventListener("storage", (event) => {
+        if (event.key !== CACHE_KEYS.portfolio) return;
+        const accountId = accountInput.value.trim();
+        if (!accountId) return;
+
+        const portfolioCache = readSharedPortfolioCache();
+        const analyticsCache = readCache(CACHE_KEYS.analytics);
+        if (!isPortfolioCacheNewerThanAnalytics(analyticsCache, portfolioCache, accountId)) return;
+
+        setStatus("Обнаружены свежие данные портфеля, обновляю аналитику...");
+        void loadAnalytics({ silent: true }).then((ok) => {
+          setStatus(ok ? "Аналитика обновлена" : "Не удалось загрузить аналитику");
+        });
       });
 
       refreshCacheBtn.addEventListener("click", async () => {
@@ -1430,16 +1812,25 @@
         }
 
         setControlsVisible(false);
-        const hasAccount = restoreFromSharedCache();
-        const hasCachedAnalytics = restoreAnalyticsCache();
-        if (hasCachedAnalytics) return;
+        const sharedState = restoreFromSharedCache();
+        const hasCachedAnalytics = restoreAnalyticsCache(sharedState.portfolioCache);
+        if (hasCachedAnalytics) {
+          const hasAccount = sharedState.hasAccount || accountInput.value.trim().length > 0;
+          if (!hasAccount) return;
 
-        if (!tokenInput.value.trim()) {
-          setStatus("Введите токен для загрузки аналитики");
+          setStatus("Обновляю аналитику в фоне...");
+          const updateResult = await withTimeoutResult(loadAnalytics({ silent: true }), 30000);
+          if (updateResult.timedOut) {
+            setLoading(false);
+            setStatus("Таймаут фонового обновления аналитики, показаны данные из кэша");
+            return;
+          }
+          const ok = Boolean(updateResult.value);
+          setStatus(ok ? "Аналитика обновлена" : "Показаны данные аналитики из кэша");
           return;
         }
 
-        if (hasAccount) {
+        if (sharedState.hasAccount) {
           setStatus("Загружаю аналитику...");
           const ok = await loadAnalytics({ silent: true });
           setStatus(ok ? "Аналитика обновлена" : "Не удалось загрузить аналитику");

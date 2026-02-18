@@ -1,0 +1,1123 @@
+openapi: 3.1.0
+info:
+  title: Invest Dashboard API
+  version: 1.0.0
+  description: API for portfolio analytics, session auth, platform automation, and observability.
+servers:
+  - url: http://localhost:3000
+tags:
+  - name: Core
+  - name: Session
+  - name: Flags
+  - name: History
+  - name: Alerts
+  - name: Jobs
+  - name: Admin
+  - name: Reports
+  - name: Observability
+paths:
+  /api/health:
+    get:
+      tags: [Core]
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service health status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/metrics:
+    get:
+      tags: [Observability]
+      operationId: getJsonMetrics
+      responses:
+        "200":
+          description: JSON metrics snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsResponse"
+  /metrics:
+    get:
+      tags: [Observability]
+      operationId: getPrometheusMetrics
+      responses:
+        "200":
+          description: Prometheus exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /api/openapi.yaml:
+    get:
+      tags: [Core]
+      operationId: downloadOpenApi
+      responses:
+        "200":
+          description: OpenAPI YAML spec.
+          content:
+            application/yaml:
+              schema:
+                type: string
+  /api/session:
+    get:
+      tags: [Session]
+      operationId: getSession
+      responses:
+        "200":
+          description: Current browser session status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionStatusResponse"
+  /api/session/token:
+    post:
+      tags: [Session]
+      operationId: setSessionToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionTokenRequest"
+      responses:
+        "200":
+          description: Session token updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/session/logout:
+    post:
+      tags: [Session]
+      operationId: clearSession
+      responses:
+        "200":
+          description: Session token removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+  /api/accounts:
+    post:
+      tags: [Core]
+      operationId: listAccounts
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountsRequest"
+      responses:
+        "200":
+          description: Broker account list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountsResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/portfolio:
+    post:
+      tags: [Core]
+      operationId: getPortfolio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountScopedRequest"
+      responses:
+        "200":
+          description: Aggregated portfolio response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortfolioResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/analytics:
+    post:
+      tags: [Core]
+      operationId: getAnalytics
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountScopedRequest"
+      responses:
+        "200":
+          description: Extended analytics response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/feature-flags:
+    get:
+      tags: [Flags]
+      operationId: getFeatureFlags
+      responses:
+        "200":
+          description: Runtime feature flags.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [flags]
+                properties:
+                  flags:
+                    $ref: "#/components/schemas/FeatureFlags"
+    post:
+      tags: [Flags]
+      operationId: updateFeatureFlags
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties:
+                type: boolean
+      responses:
+        "200":
+          description: Updated runtime feature flags.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [flags]
+                properties:
+                  flags:
+                    $ref: "#/components/schemas/FeatureFlags"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/feature-flags/reset:
+    post:
+      tags: [Flags]
+      operationId: resetFeatureFlags
+      responses:
+        "200":
+          description: Runtime overrides dropped.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [flags]
+                properties:
+                  flags:
+                    $ref: "#/components/schemas/FeatureFlags"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/history/meta:
+    get:
+      tags: [History]
+      operationId: getHistoryMeta
+      responses:
+        "200":
+          description: History storage metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HistoryMeta"
+  /api/history/snapshots:
+    get:
+      tags: [History]
+      operationId: listHistorySnapshots
+      parameters:
+        - $ref: "#/components/parameters/accountIdQuery"
+        - $ref: "#/components/parameters/limitQuery"
+      responses:
+        "200":
+          description: Historical portfolio snapshots.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  accountId:
+                    type: string
+                    nullable: true
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/HistorySnapshot"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/history/events:
+    get:
+      tags: [History]
+      operationId: listHistoryEvents
+      parameters:
+        - $ref: "#/components/parameters/accountIdQuery"
+        - $ref: "#/components/parameters/limitQuery"
+      responses:
+        "200":
+          description: Historical timeline events.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  accountId:
+                    type: string
+                    nullable: true
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/HistoryEvent"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/alerts/rules:
+    get:
+      tags: [Alerts]
+      operationId: listAlertRules
+      parameters:
+        - $ref: "#/components/parameters/accountIdQuery"
+      responses:
+        "200":
+          description: Configured alert rules.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AlertRule"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [Alerts]
+      operationId: createAlertRule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertRuleCreateRequest"
+      responses:
+        "201":
+          description: Alert rule created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRule"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/alerts/rules/{id}:
+    patch:
+      tags: [Alerts]
+      operationId: patchAlertRule
+      parameters:
+        - $ref: "#/components/parameters/ruleIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Updated alert rule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRule"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+    delete:
+      tags: [Alerts]
+      operationId: deleteAlertRule
+      parameters:
+        - $ref: "#/components/parameters/ruleIdPath"
+      responses:
+        "200":
+          description: Rule deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/alerts/notifications:
+    get:
+      tags: [Alerts]
+      operationId: listAlertNotifications
+      parameters:
+        - $ref: "#/components/parameters/accountIdQuery"
+        - $ref: "#/components/parameters/limitQuery"
+      responses:
+        "200":
+          description: Alert notifications timeline.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AlertNotification"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/alerts/check:
+    post:
+      tags: [Alerts]
+      operationId: runAlertCheck
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountScopedRequest"
+      responses:
+        "200":
+          description: Alert checks completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, created]
+                properties:
+                  ok:
+                    type: boolean
+                  created:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AlertNotification"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/jobs:
+    get:
+      tags: [Jobs]
+      operationId: listJobs
+      parameters:
+        - $ref: "#/components/parameters/accountIdQuery"
+        - $ref: "#/components/parameters/limitQuery"
+      responses:
+        "200":
+          description: Background jobs queue.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BackgroundJob"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/jobs/analytics:
+    post:
+      tags: [Jobs]
+      operationId: enqueueAnalyticsJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountScopedRequest"
+      responses:
+        "202":
+          description: Job queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackgroundJob"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/jobs/{jobId}:
+    get:
+      tags: [Jobs]
+      operationId: getJobById
+      parameters:
+        - $ref: "#/components/parameters/jobIdPath"
+      responses:
+        "200":
+          description: Background job details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackgroundJob"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/admin/users:
+    get:
+      tags: [Admin]
+      operationId: listUsers
+      responses:
+        "200":
+          description: RBAC users.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/UserRecord"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+    post:
+      tags: [Admin]
+      operationId: createOrUpdateUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserUpsertRequest"
+      responses:
+        "201":
+          description: User saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserRecord"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/admin/users/{userId}:
+    delete:
+      tags: [Admin]
+      operationId: deleteUser
+      parameters:
+        - $ref: "#/components/parameters/userIdPath"
+      responses:
+        "200":
+          description: User deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/admin/users/{userId}/accounts:
+    post:
+      tags: [Admin]
+      operationId: assignUserAccount
+      parameters:
+        - $ref: "#/components/parameters/userIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accountId]
+              properties:
+                accountId:
+                  type: string
+      responses:
+        "200":
+          description: Account granted to user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserRecord"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/admin/users/{userId}/accounts/{accountId}:
+    delete:
+      tags: [Admin]
+      operationId: revokeUserAccount
+      parameters:
+        - $ref: "#/components/parameters/userIdPath"
+        - $ref: "#/components/parameters/accountIdPath"
+      responses:
+        "200":
+          description: Account revoked from user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserRecord"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/reports/export:
+    post:
+      tags: [Reports]
+      operationId: exportReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accountId, format]
+              properties:
+                accountId:
+                  type: string
+                format:
+                  type: string
+                  enum: [json, xlsx, pdf]
+      responses:
+        "200":
+          description: Generated report payload.
+          content:
+            application/json:
+              schema:
+                type: object
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "403":
+          $ref: "#/components/responses/ErrorResponse"
+  /api/slo:
+    get:
+      tags: [Observability]
+      operationId: getSloSnapshot
+      responses:
+        "200":
+          description: SLO and error budget snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SloSnapshot"
+components:
+  parameters:
+    accountIdQuery:
+      name: accountId
+      in: query
+      required: false
+      schema:
+        type: string
+    limitQuery:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+    ruleIdPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    userIdPath:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+    accountIdPath:
+      name: accountId
+      in: path
+      required: true
+      schema:
+        type: string
+    jobIdPath:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    ErrorResponse:
+      description: API error response.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    OkResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        requestId:
+          type: string
+        details:
+          description: Additional details, shape depends on endpoint.
+    HealthResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+    MetricsResponse:
+      type: object
+      required: [uptimeSec, totalRequests, byStatus, byRoute]
+      properties:
+        uptimeSec:
+          type: integer
+          minimum: 0
+        totalRequests:
+          type: integer
+          minimum: 0
+        byStatus:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 0
+        byRoute:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 0
+    SessionStatusResponse:
+      type: object
+      required: [ok, hasToken]
+      properties:
+        ok:
+          type: boolean
+        hasToken:
+          type: boolean
+    SessionTokenRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 1
+    AccountsRequest:
+      type: object
+      properties:
+        token:
+          type: string
+    AccountScopedRequest:
+      type: object
+      required: [accountId]
+      properties:
+        token:
+          type: string
+        accountId:
+          type: string
+          minLength: 1
+    AccountsResponse:
+      type: object
+      properties:
+        accounts:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              type:
+                type: string
+              status:
+                type: string
+    PortfolioResponse:
+      type: object
+      required: [total, positions, moverPositions]
+      properties:
+        total:
+          type: string
+        positions:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        moverPositions:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    AnalyticsResponse:
+      type: object
+      required: [currency, total, profitRub, profitPct, assetPie, incomeNext12, upcomingEvents]
+      properties:
+        currency:
+          type: string
+        total:
+          type: string
+        profitRub:
+          type: string
+        profitValue:
+          type: number
+        profitPct:
+          type: string
+        yieldPct:
+          type: string
+        assetPie:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        assetBreakdown:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        myAssets:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        myAssetsTotals:
+          type: object
+          additionalProperties: true
+        incomeNext12:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        receivedDividends12:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        redemptionsNext12:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        upcomingEvents:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    FeatureFlags:
+      type: object
+      required:
+        - native_ui_default
+        - session_auth_required
+        - background_analytics_jobs
+        - reports_export_enabled
+        - alerts_enabled
+        - rbac_enabled
+      properties:
+        native_ui_default:
+          type: boolean
+        session_auth_required:
+          type: boolean
+        background_analytics_jobs:
+          type: boolean
+        reports_export_enabled:
+          type: boolean
+        alerts_enabled:
+          type: boolean
+        rbac_enabled:
+          type: boolean
+    HistoryMeta:
+      type: object
+      required: [snapshots, events, updatedAt]
+      properties:
+        snapshots:
+          type: integer
+        events:
+          type: integer
+        updatedAt:
+          type: string
+          format: date-time
+    HistorySnapshot:
+      type: object
+      required: [id, accountId, source, capturedAt, dateKey, totalText, totalValue]
+      properties:
+        id:
+          type: string
+        accountId:
+          type: string
+        source:
+          type: string
+          enum: [portfolio, analytics]
+        capturedAt:
+          type: string
+          format: date-time
+        dateKey:
+          type: string
+        totalText:
+          type: string
+        totalValue:
+          type: number
+        profitValue:
+          type: number
+        yieldPct:
+          type: number
+        currency:
+          type: string
+    HistoryEvent:
+      type: object
+      required: [id, accountId, eventType, title, createdAt]
+      properties:
+        id:
+          type: string
+        accountId:
+          type: string
+        eventType:
+          type: string
+        title:
+          type: string
+        details:
+          type: string
+        payload:
+          description: Arbitrary event payload.
+        createdAt:
+          type: string
+          format: date-time
+    AlertRule:
+      type: object
+      required:
+        - id
+        - name
+        - metric
+        - operator
+        - threshold
+        - severity
+        - channel
+        - enabled
+        - cooldownMinutes
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        accountId:
+          type: string
+        metric:
+          type: string
+          enum: [total_value, profit_value, yield_pct]
+        operator:
+          type: string
+          enum: [lt, lte, gt, gte]
+        threshold:
+          type: number
+        severity:
+          type: string
+          enum: [info, warn, critical]
+        channel:
+          type: string
+          enum: [log, webhook, email, telegram]
+        enabled:
+          type: boolean
+        cooldownMinutes:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        lastTriggeredAt:
+          type: string
+          format: date-time
+    AlertRuleCreateRequest:
+      type: object
+      required: [name, metric, operator, threshold]
+      properties:
+        name:
+          type: string
+        accountId:
+          type: string
+        metric:
+          type: string
+          enum: [total_value, profit_value, yield_pct]
+        operator:
+          type: string
+          enum: [lt, lte, gt, gte]
+        threshold:
+          type: number
+        severity:
+          type: string
+          enum: [info, warn, critical]
+        channel:
+          type: string
+          enum: [log, webhook, email, telegram]
+        enabled:
+          type: boolean
+        cooldownMinutes:
+          type: number
+    AlertNotification:
+      type: object
+      required:
+        - id
+        - ruleId
+        - accountId
+        - severity
+        - channel
+        - title
+        - message
+        - value
+        - threshold
+        - createdAt
+        - delivered
+      properties:
+        id:
+          type: string
+        ruleId:
+          type: string
+        accountId:
+          type: string
+        severity:
+          type: string
+          enum: [info, warn, critical]
+        channel:
+          type: string
+          enum: [log, webhook, email, telegram]
+        title:
+          type: string
+        message:
+          type: string
+        value:
+          type: number
+        threshold:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+        delivered:
+          type: boolean
+    BackgroundJob:
+      type: object
+      required: [id, type, accountId, status, createdAt]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [analytics_report]
+        accountId:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        error:
+          type: string
+        result:
+          type: object
+          additionalProperties: true
+    UserRecord:
+      type: object
+      required: [id, role, accounts, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          enum: [viewer, editor, admin]
+        accounts:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    UserUpsertRequest:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          enum: [viewer, editor, admin]
+        accounts:
+          type: array
+          items:
+            type: string
+    SloSnapshot:
+      type: object
+      required:
+        - objectivePct
+        - availabilityPct
+        - successRequests
+        - totalRequests
+        - errorBudgetPct
+        - consumedErrorBudgetPct
+        - burnRate
+        - healthy
+      properties:
+        objectivePct:
+          type: number
+        availabilityPct:
+          type: number
+        successRequests:
+          type: integer
+        totalRequests:
+          type: integer
+        errorBudgetPct:
+          type: number
+        consumedErrorBudgetPct:
+          type: number
+        burnRate:
+          type: number
+        healthy:
+          type: boolean

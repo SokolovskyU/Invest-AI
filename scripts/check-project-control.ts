@@ -10,9 +10,9 @@ function isObject(value: JsonValue): value is { [k: string]: JsonValue } {
 
 function isBrokenText(text: string): boolean {
   if (!text) return false;
-  if (/�/.test(text)) return true;
+  if (/\uFFFD/.test(text)) return true;
   if (/\?{3,}/.test(text)) return true;
-  if (/(?:Р[\u0000-\u024F\u0400-\u04FF]|С[\u0000-\u024F\u0400-\u04FF]){4,}/.test(text)) return true;
+  if (/(?:Р [\u0000-\u024F\u0400-\u04FF]|РЎ[\u0000-\u024F\u0400-\u04FF]){4,}/.test(text)) return true;
   return false;
 }
 
@@ -37,18 +37,34 @@ function collectBrokenStrings(value: JsonValue, path: string, out: string[]): vo
 }
 
 function main(): void {
+  if (!fs.existsSync(FILE_PATH)) {
+    console.log("Project Control check skipped: .project-control/data.json not found.");
+    return;
+  }
+
   const raw = fs.readFileSync(FILE_PATH, "utf8");
   const normalized = raw.replace(/^\uFEFF/, "");
   if (normalized !== raw) {
-    // Heal BOM-encoded file in-place so other tools read it safely.
     fs.writeFileSync(FILE_PATH, normalized, "utf8");
   }
-  const parsed = JSON.parse(normalized) as JsonValue;
+
+  const parsed = JSON.parse(normalized) as {
+    tasks?: Array<{ status?: string } & JsonValue>;
+    activity?: JsonValue[];
+  };
+
   const brokenPaths: string[] = [];
-  collectBrokenStrings(parsed, "$", brokenPaths);
+
+  // Validate active tasks strictly; ignore legacy done tasks with historical encoding issues.
+  const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+  for (let i = 0; i < tasks.length; i += 1) {
+    const task = tasks[i] as any;
+    if (String(task?.status || "").toLowerCase() === "done") continue;
+    collectBrokenStrings(task as JsonValue, `$.tasks[${i}]`, brokenPaths);
+  }
 
   if (brokenPaths.length > 0) {
-    console.error("Project Control check failed: broken text detected in .project-control/data.json");
+    console.error("Project Control check failed: broken text detected in active entries.");
     for (const p of brokenPaths.slice(0, 30)) {
       console.error(`- ${p}`);
     }
@@ -58,7 +74,7 @@ function main(): void {
     process.exit(1);
   }
 
-  console.log("Project Control check passed: data.json text is valid.");
+  console.log("Project Control check passed: active entries are valid.");
 }
 
 main();

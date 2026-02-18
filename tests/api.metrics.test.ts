@@ -37,6 +37,11 @@ async function run() {
   assert.ok(typeof metricsBody.byStatus === "object");
   assert.ok(typeof metricsBody.byRoute === "object");
 
+  const promMetrics = await fetch(`http://127.0.0.1:${port}/metrics`);
+  assert.equal(promMetrics.status, 200);
+  const promMetricsText = await promMetrics.text();
+  assert.ok(promMetricsText.includes("invest_http_requests_total"));
+
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 

@@ -78,6 +78,34 @@ export type InstrumentsServiceClient = grpc.Client & {
     metadata: grpc.Metadata,
     callback: (err: grpc.ServiceError | null, response: unknown) => void
   ) => void;
+  Futures?: (
+    request: { instrument_status?: string },
+    metadata: grpc.Metadata,
+    callback: (err: grpc.ServiceError | null, response: unknown) => void
+  ) => void;
+  Options?: (
+    request: { instrument_status?: string },
+    metadata: grpc.Metadata,
+    callback: (err: grpc.ServiceError | null, response: unknown) => void
+  ) => void;
+  GetBondCoupons: (
+    request: {
+      figi: string;
+      from: { seconds: string | number; nanos: number };
+      to: { seconds: string | number; nanos: number };
+    },
+    metadata: grpc.Metadata,
+    callback: (err: grpc.ServiceError | null, response: unknown) => void
+  ) => void;
+  GetDividends: (
+    request: {
+      figi: string;
+      from: { seconds: string | number; nanos: number };
+      to: { seconds: string | number; nanos: number };
+    },
+    metadata: grpc.Metadata,
+    callback: (err: grpc.ServiceError | null, response: unknown) => void
+  ) => void;
 };
 
 export type MarketDataServiceClient = grpc.Client & {
@@ -91,10 +119,33 @@ export type MarketDataServiceClient = grpc.Client & {
     metadata: grpc.Metadata,
     callback: (err: grpc.ServiceError | null, response: unknown) => void
   ) => void;
+  GetCandles?: (
+    request: {
+      instrument_id: string;
+      from: { seconds: string | number; nanos: number };
+      to: { seconds: string | number; nanos: number };
+      interval: string;
+    },
+    metadata: grpc.Metadata,
+    callback: (err: grpc.ServiceError | null, response: unknown) => void
+  ) => void;
 };
 
-function loadProto(protoPath: string) {
-  return protoLoader.loadSync(protoPath, {
+const packageDefinitionCache = new Map<string, protoLoader.PackageDefinition>();
+const grpcObjectCache = new Map<string, grpc.GrpcObject>();
+const serviceConstructorCache = new Map<string, any>();
+const clientCache = new Map<string, grpc.Client>();
+
+function getUseInsecure(): boolean {
+  const useInsecure =
+    process.env.TINVEST_INSECURE?.trim().toLowerCase() === "true";
+  return useInsecure;
+}
+
+function loadProto(protoPath: string): protoLoader.PackageDefinition {
+  const cached = packageDefinitionCache.get(protoPath);
+  if (cached) return cached;
+  const loaded = protoLoader.loadSync(protoPath, {
     keepCase: true,
     longs: String,
     enums: String,
@@ -102,11 +153,21 @@ function loadProto(protoPath: string) {
     oneofs: true,
     includeDirs: [PROTO_DIR],
   });
+  packageDefinitionCache.set(protoPath, loaded);
+  return loaded;
+}
+
+function loadGrpcObject(protoPath: string): grpc.GrpcObject {
+  const cached = grpcObjectCache.get(protoPath);
+  if (cached) return cached;
+  const packageDefinition = loadProto(protoPath);
+  const loaded = grpc.loadPackageDefinition(packageDefinition);
+  grpcObjectCache.set(protoPath, loaded);
+  return loaded;
 }
 
 function createCredentials() {
-  const useInsecure =
-    process.env.TINVEST_INSECURE?.trim().toLowerCase() === "true";
+  const useInsecure = getUseInsecure();
   return useInsecure
     ? grpc.credentials.createSsl(undefined, undefined, undefined, {
         rejectUnauthorized: false,
@@ -114,55 +175,99 @@ function createCredentials() {
     : grpc.credentials.createSsl();
 }
 
-export function createUsersClient(endpoint: string): UsersServiceClient {
-  const packageDefinition = loadProto(USERS_PROTO);
-  const proto = grpc.loadPackageDefinition(packageDefinition) as any;
-  const UsersService =
-    proto.tinkoff.public.invest.api.contract.v1.UsersService;
+function getServiceConstructor<TClient extends grpc.Client>(
+  serviceKey: string,
+  protoPath: string,
+  resolver: (proto: any) => new (
+    address: string,
+    credentials: grpc.ChannelCredentials
+  ) => TClient
+): new (address: string, credentials: grpc.ChannelCredentials) => TClient {
+  const cached = serviceConstructorCache.get(serviceKey);
+  if (cached) return cached;
+  const proto = loadGrpcObject(protoPath) as any;
+  const Service = resolver(proto);
+  serviceConstructorCache.set(serviceKey, Service);
+  return Service;
+}
 
-  return new UsersService(endpoint, createCredentials()) as UsersServiceClient;
+function getClientCacheKey(serviceName: string, endpoint: string): string {
+  const insecureFlag = getUseInsecure() ? "insecure" : "secure";
+  return `${serviceName}:${endpoint}:${insecureFlag}`;
+}
+
+function getOrCreateClient<TClient extends grpc.Client>(
+  serviceName: string,
+  endpoint: string,
+  constructorFactory: () => new (
+    address: string,
+    credentials: grpc.ChannelCredentials
+  ) => TClient
+): TClient {
+  const key = getClientCacheKey(serviceName, endpoint);
+  const cached = clientCache.get(key);
+  if (cached) return cached as TClient;
+  const Service = constructorFactory();
+  const created = new Service(endpoint, createCredentials());
+  clientCache.set(key, created);
+  return created;
+}
+
+export function createUsersClient(endpoint: string): UsersServiceClient {
+  return getOrCreateClient("UsersService", endpoint, () =>
+    getServiceConstructor<UsersServiceClient>(
+      "UsersService",
+      USERS_PROTO,
+      (proto) => proto.tinkoff.public.invest.api.contract.v1.UsersService
+    )
+  );
 }
 
 export function createOperationsClient(
   endpoint: string
 ): OperationsServiceClient {
-  const packageDefinition = loadProto(OPERATIONS_PROTO);
-  const proto = grpc.loadPackageDefinition(packageDefinition) as any;
-  const OperationsService =
-    proto.tinkoff.public.invest.api.contract.v1.OperationsService;
-
-  return new OperationsService(
-    endpoint,
-    createCredentials()
-  ) as OperationsServiceClient;
+  return getOrCreateClient("OperationsService", endpoint, () =>
+    getServiceConstructor<OperationsServiceClient>(
+      "OperationsService",
+      OPERATIONS_PROTO,
+      (proto) => proto.tinkoff.public.invest.api.contract.v1.OperationsService
+    )
+  );
 }
 
 export function createInstrumentsClient(
   endpoint: string
 ): InstrumentsServiceClient {
-  const packageDefinition = loadProto(INSTRUMENTS_PROTO);
-  const proto = grpc.loadPackageDefinition(packageDefinition) as any;
-  const InstrumentsService =
-    proto.tinkoff.public.invest.api.contract.v1.InstrumentsService;
-
-  return new InstrumentsService(
-    endpoint,
-    createCredentials()
-  ) as InstrumentsServiceClient;
+  return getOrCreateClient("InstrumentsService", endpoint, () =>
+    getServiceConstructor<InstrumentsServiceClient>(
+      "InstrumentsService",
+      INSTRUMENTS_PROTO,
+      (proto) => proto.tinkoff.public.invest.api.contract.v1.InstrumentsService
+    )
+  );
 }
 
 export function createMarketDataClient(
   endpoint: string
 ): MarketDataServiceClient {
-  const packageDefinition = loadProto(MARKETDATA_PROTO);
-  const proto = grpc.loadPackageDefinition(packageDefinition) as any;
-  const MarketDataService =
-    proto.tinkoff.public.invest.api.contract.v1.MarketDataService;
+  return getOrCreateClient("MarketDataService", endpoint, () =>
+    getServiceConstructor<MarketDataServiceClient>(
+      "MarketDataService",
+      MARKETDATA_PROTO,
+      (proto) => proto.tinkoff.public.invest.api.contract.v1.MarketDataService
+    )
+  );
+}
 
-  return new MarketDataService(
-    endpoint,
-    createCredentials()
-  ) as MarketDataServiceClient;
+export function closeGrpcClients(): void {
+  for (const client of clientCache.values()) {
+    try {
+      client.close();
+    } catch {
+      // ignore close errors during shutdown
+    }
+  }
+  clientCache.clear();
 }
 
 export function buildAuthMetadata(token: string, appName?: string): grpc.Metadata {

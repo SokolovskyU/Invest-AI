@@ -1,4 +1,6 @@
-import type { Express } from "express";
+import express, { type Express, type Request } from "express";
+import fs from "node:fs";
+import path from "node:path";
 import {
   buildAuthMetadata,
   createInstrumentsClient,
@@ -9,14 +11,13 @@ import {
 import {
   fetchInstrumentsBatch,
   clearAllCaches,
-  clearInstrumentCaches,
   getDisplayName,
   getInstrumentInfo,
   incomeCache,
   instrumentBatchCache,
-  instrumentCache,
   persistIncomeCache,
   persistInstrumentCaches,
+  setCacheContext,
   upsertInstrumentCache,
 } from "./cache";
 import { grpcCall, grpcCallWithRetry, mapLimit } from "./grpcHelpers";
@@ -27,18 +28,35 @@ import {
   normalizeBondCompany,
   safePercent,
   toNumber,
-  xirr,
 } from "./utils";
-import type { Cashflow } from "./utils";
 import { renderAnalyticsPage } from "./ui/analyticsPage";
 import { renderHomePage } from "./ui/homePage";
 import type { AccountsResponse, PortfolioResponse } from "./types";
-import { getMetrics } from "./metrics";
+import {
+  getMetrics,
+  getPromMetrics,
+  getPromMetricsContentType,
+  recordAnalyticsMetrics,
+  recordPortfolioMetrics,
+} from "./metrics";
+import {
+  accountScopedPayloadSchema,
+  accountsPayloadSchema,
+  healthResponseSchema,
+  mapZodIssues,
+  metricsResponseSchema,
+} from "./validation/payloads";
+import { logWarn } from "./logger";
+import { resolveAuthToken } from "./auth/session";
+import { registerSessionRoutes } from "./routes/sessionRoutes";
+import { registerPlatformRoutes } from "./routes/platformRoutes";
+import { canAccessAccount } from "./platform/rbac";
 
 export type AppConfig = {
   endpoint: string;
   appName?: string;
   defaultToken?: string;
+  uiMode?: "auto" | "react" | "legacy";
   clients?: {
     createUsersClient: typeof createUsersClient;
     createOperationsClient: typeof createOperationsClient;
@@ -49,12 +67,20 @@ export type AppConfig = {
 
 export function registerRoutes(app: Express, config: AppConfig): void {
   const { endpoint, appName, defaultToken } = config;
+  setCacheContext({ endpoint });
   const clients = config.clients || {
     createUsersClient,
     createOperationsClient,
     createInstrumentsClient,
     createMarketDataClient,
   };
+  const unknownDisplayName = "\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e";
+  const movers24hBaselineCache = new Map<string, { price24h: number; updatedAt: number }>();
+  const MOVERS_24H_CACHE_TTL_MS = 10 * 60 * 1000;
+  const HOUR_MS = 60 * 60 * 1000;
+  const DAY_MS = 24 * HOUR_MS;
+  const resolveToken = (req: Request, tokenFromBody?: string): string =>
+    resolveAuthToken(req, tokenFromBody, defaultToken);
   const isBlockedPosition = (p: any): boolean => {
     if (!p) return false;
     if (p.blocked === true) return true;
@@ -64,28 +90,99 @@ export function registerRoutes(app: Express, config: AppConfig): void {
     return Number.isFinite(blocked) && blocked > 0;
   };
 
-  app.get("/", (_req, res) => {
+  const sendLegacyHome = (_req: any, res: any) => {
     res.set("Content-Type", "text/html; charset=utf-8");
     res.send(renderHomePage());
-  });
+  };
+
+  const sendLegacyAnalytics = (_req: any, res: any) => {
+    res.set("Content-Type", "text/html; charset=utf-8");
+    res.send(renderAnalyticsPage());
+  };
+
+  const rawUiMode = String(config.uiMode || process.env.UI_MODE || "")
+    .trim()
+    .toLowerCase();
+  const explicitUiMode =
+    rawUiMode === "react" || rawUiMode === "legacy" || rawUiMode === "auto"
+      ? rawUiMode
+      : "";
+  const legacyFlag = process.env.LEGACY_UI?.trim().toLowerCase() === "true";
+  const uiMode: "auto" | "react" | "legacy" = explicitUiMode
+    ? (explicitUiMode as "auto" | "react" | "legacy")
+    : legacyFlag
+      ? "legacy"
+      : "auto";
+
+  const frontendDistDir = path.resolve("web", "dist");
+  const frontendIndexPath = path.join(frontendDistDir, "index.html");
+  const hasReactBuild = fs.existsSync(frontendIndexPath);
+  const wantsReactUi = uiMode === "react" || uiMode === "auto";
+  const useReactUi = wantsReactUi && hasReactBuild;
+
+  if (uiMode === "react" && !hasReactBuild) {
+    logWarn("react_ui_build_missing_fallback_legacy", {
+      uiMode,
+      frontendIndexPath,
+    });
+  }
+
+  if (useReactUi) {
+    app.use(
+      express.static(frontendDistDir, {
+        index: false,
+        etag: true,
+        maxAge: "1h",
+      })
+    );
+    app.get("/", (_req, res) => {
+      res.sendFile(frontendIndexPath);
+    });
+    app.get("/analytics", (_req, res) => {
+      res.sendFile(frontendIndexPath);
+    });
+  } else {
+    app.get("/", sendLegacyHome);
+    app.get("/analytics", sendLegacyAnalytics);
+  }
+
+  app.get("/legacy", sendLegacyHome);
+  app.get("/legacy/analytics", sendLegacyAnalytics);
+
+  registerSessionRoutes(app);
+  registerPlatformRoutes(app);
 
   app.get("/api/health", (_req, res) => {
-    res.json({ ok: true });
+    const payload = healthResponseSchema.parse({ ok: true });
+    res.json(payload);
   });
 
   app.get("/api/metrics", (_req, res) => {
-    res.json(getMetrics());
+    const payload = metricsResponseSchema.parse(getMetrics());
+    res.json(payload);
   });
 
-  app.get("/analytics", (_req, res) => {
-    res.set("Content-Type", "text/html; charset=utf-8");
-    res.send(renderAnalyticsPage());
+  app.get("/metrics", async (_req, res) => {
+    try {
+      res.set("Content-Type", getPromMetricsContentType());
+      res.send(await getPromMetrics());
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Metrics export failed" });
+    }
   });
 
   app.post("/api/accounts", (req, res) => {
-    const tokenFromBody =
-      typeof req.body?.token === "string" ? req.body.token.trim() : "";
-    const token = tokenFromBody || defaultToken;
+    const parsed = accountsPayloadSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "Invalid payload",
+        details: mapZodIssues(parsed.error),
+      });
+      return;
+    }
+
+    const tokenFromBody = parsed.data.token || "";
+    const token = resolveToken(req, tokenFromBody);
 
     if (!token) {
       res.status(400).json({ error: "Missing token" });
@@ -105,11 +202,18 @@ export function registerRoutes(app: Express, config: AppConfig): void {
   });
 
   app.post("/api/portfolio", (req, res) => {
-    const tokenFromBody =
-      typeof req.body?.token === "string" ? req.body.token.trim() : "";
-    const token = tokenFromBody || defaultToken;
-    const accountId =
-      typeof req.body?.accountId === "string" ? req.body.accountId.trim() : "";
+    const parsed = accountScopedPayloadSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "Invalid payload",
+        details: mapZodIssues(parsed.error),
+      });
+      return;
+    }
+
+    const tokenFromBody = parsed.data.token || "";
+    const token = resolveToken(req, tokenFromBody);
+    const accountId = parsed.data.accountId;
 
     if (!token) {
       res.status(400).json({ error: "Missing token" });
@@ -117,6 +221,10 @@ export function registerRoutes(app: Express, config: AppConfig): void {
     }
     if (!accountId) {
       res.status(400).json({ error: "Missing accountId" });
+      return;
+    }
+    if (!canAccessAccount(req, accountId)) {
+      res.status(403).json({ error: "Forbidden: account access denied" });
       return;
     }
 
@@ -137,7 +245,21 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       const instrumentsClient = clients.createInstrumentsClient(endpoint);
       const marketDataClient = clients.createMarketDataClient(endpoint);
 
-      if (positions.length) {
+      if (rawPositions.length) {
+        const fetchBatchIfAvailable = async (
+          kind: string,
+          cacheKey: string
+        ): Promise<any[]> => {
+          const method = (instrumentsClient as any)?.[kind];
+          if (typeof method !== "function") return [];
+          return fetchInstrumentsBatch(
+            instrumentsClient,
+            metadata,
+            kind,
+            cacheKey
+          );
+        };
+
         const shares = await fetchInstrumentsBatch(
           instrumentsClient,
           metadata,
@@ -162,15 +284,89 @@ export function registerRoutes(app: Express, config: AppConfig): void {
           "Bonds",
           "bonds"
         );
-        const all = ([] as any[]).concat(shares, etfs, currencies, bonds);
+        const futures = await fetchBatchIfAvailable("Futures", "futures");
+        const options = await fetchBatchIfAvailable("Options", "options");
+        const all = ([] as any[]).concat(
+          shares,
+          etfs,
+          currencies,
+          bonds,
+          futures,
+          options
+        );
         upsertInstrumentCache(all);
+
+        const unresolvedRequests = new Map<string, { idType: string; id: string }>();
+        for (const position of rawPositions) {
+          const info = getInstrumentInfo(position);
+          const type = String(position?.instrument_type || "").toLowerCase();
+          const hasName = getDisplayName(position) !== unknownDisplayName;
+          const hasSector = String(info?.sector || "").trim().length > 0;
+          const hasCountry = String(info?.countryOfRisk || "").trim().length > 0;
+          const hasCurrency =
+            String(info?.currency || info?.nominal?.currency || "").trim().length > 0;
+          const needsSector = type === "share" || type === "etf";
+          const needsCountry = type !== "futures" && type !== "option";
+          const needsDiversificationMeta =
+            !hasCurrency || (needsCountry && !hasCountry) || (needsSector && !hasSector);
+          if (hasName && !needsDiversificationMeta) continue;
+          const byUid = String(position?.instrument_uid || position?.instrumentUid || "").trim();
+          const byFigi = String(position?.figi || "").trim();
+          const byPositionUid = String(position?.position_uid || position?.positionUid || "").trim();
+
+          if (byUid) {
+            unresolvedRequests.set(`uid:${byUid}`, {
+              idType: "INSTRUMENT_ID_TYPE_UID",
+              id: byUid,
+            });
+          }
+          if (byFigi) {
+            unresolvedRequests.set(`figi:${byFigi}`, {
+              idType: "INSTRUMENT_ID_TYPE_FIGI",
+              id: byFigi,
+            });
+          }
+          if (byPositionUid) {
+            unresolvedRequests.set(`position_uid:${byPositionUid}`, {
+              idType: "INSTRUMENT_ID_TYPE_POSITION_UID",
+              id: byPositionUid,
+            });
+          }
+        }
+
+        const getInstrumentBy = (instrumentsClient as any)?.GetInstrumentBy;
+        if (unresolvedRequests.size > 0 && typeof getInstrumentBy === "function") {
+          const resolvedInstruments = await mapLimit(
+            Array.from(unresolvedRequests.values()),
+            6,
+            async ({ idType, id }) => {
+              try {
+                const resp: any = await grpcCallWithRetry(
+                  getInstrumentBy.bind(instrumentsClient),
+                  { id_type: idType, id },
+                  metadata,
+                  2
+                );
+                return resp?.instrument || null;
+              } catch {
+                return null;
+              }
+            }
+          );
+
+          const validResolved = resolvedInstruments.filter(
+            (instrument) => instrument && typeof instrument === "object"
+          );
+          if (validResolved.length > 0) {
+            upsertInstrumentCache(validResolved);
+          }
+        }
+
         persistInstrumentCaches();
       }
 
-      const receivedDividendOps: Array<{ time: number; amount: number }> = [];
-
       try {
-        const instrumentIds = positions
+        const instrumentIds = rawPositions
           .map((p) => String(p.instrument_uid || p.figi || "").trim())
           .filter((id) => id.length > 0);
         const uniqueInstrumentIds = Array.from(new Set(instrumentIds));
@@ -179,49 +375,126 @@ export function registerRoutes(app: Express, config: AppConfig): void {
         let closePricesById = new Map<string, number>();
 
         if (uniqueInstrumentIds.length) {
+          const addPrice = (map: Map<string, number>, item: any) => {
+            const price = toNumber(item?.price);
+            const instrumentUid = String(item?.instrument_uid || "").trim();
+            const figi = String(item?.figi || "").trim();
+            if (instrumentUid) map.set(instrumentUid, price);
+            if (figi) map.set(figi, price);
+          };
+
+          let lastPricesResp: any = null;
+          let closePricesResp: any = null;
+
           try {
-            const [lastPricesResp, closePricesResp]: [any, any] = await Promise.all([
-              grpcCall(
-                marketDataClient.GetLastPrices.bind(marketDataClient),
-                { instrument_id: uniqueInstrumentIds },
-                metadata
-              ),
-              grpcCall(
-                marketDataClient.GetClosePrices.bind(marketDataClient),
-                {
-                  instruments: uniqueInstrumentIds.map((id) => ({ instrument_id: id })),
-                },
-                metadata
-              ),
-            ]);
+            lastPricesResp = await grpcCall(
+              marketDataClient.GetLastPrices.bind(marketDataClient),
+              { instrument_id: uniqueInstrumentIds },
+              metadata
+            );
+          } catch {
+            lastPricesResp = null;
+          }
+          try {
+            closePricesResp = await grpcCall(
+              marketDataClient.GetClosePrices.bind(marketDataClient),
+              {
+                instruments: uniqueInstrumentIds.map((id) => ({ instrument_id: id })),
+              },
+              metadata
+            );
+          } catch {
+            closePricesResp = null;
+          }
 
-            const addPrice = (map: Map<string, number>, item: any) => {
-              const price = toNumber(item?.price);
-              const instrumentUid = String(item?.instrument_uid || "").trim();
-              const figi = String(item?.figi || "").trim();
-              if (instrumentUid) map.set(instrumentUid, price);
-              if (figi) map.set(figi, price);
-            };
+          const lastPrices = Array.isArray(lastPricesResp?.last_prices)
+            ? lastPricesResp.last_prices
+            : [];
+          lastPricesById = new Map<string, number>();
+          for (const item of lastPrices) addPrice(lastPricesById, item);
 
-            const lastPrices = Array.isArray(lastPricesResp?.last_prices)
-              ? lastPricesResp.last_prices
-              : [];
-            lastPricesById = new Map<string, number>();
-            for (const item of lastPrices) addPrice(lastPricesById, item);
+          const closePrices = Array.isArray(closePricesResp?.close_prices)
+            ? closePricesResp.close_prices
+            : [];
+          closePricesById = new Map<string, number>();
+          for (const item of closePrices) addPrice(closePricesById, item);
 
-            const closePrices = Array.isArray(closePricesResp?.close_prices)
-              ? closePricesResp.close_prices
-              : [];
-            closePricesById = new Map<string, number>();
-            for (const item of closePrices) addPrice(closePricesById, item);
+          let missingDayPriceIds = uniqueInstrumentIds.filter((id) => {
+            const last = lastPricesById.get(id);
+            const close = closePricesById.get(id);
+            return !(Number.isFinite(last) && Number.isFinite(close) && (close as number) !== 0);
+          });
 
-            const missingDayPriceIds = uniqueInstrumentIds.filter((id) => {
+          // If bulk price methods partially fail, retry per instrument so one bad id does not hide all movers.
+          if (missingDayPriceIds.length) {
+            const pricePairs = await mapLimit(
+              missingDayPriceIds,
+              8,
+              async (instrumentId) => {
+                let lastPrice = lastPricesById.get(instrumentId);
+                let closePrice = closePricesById.get(instrumentId);
+
+                if (!Number.isFinite(lastPrice)) {
+                  try {
+                    const resp: any = await grpcCall(
+                      marketDataClient.GetLastPrices.bind(marketDataClient),
+                      { instrument_id: [instrumentId] },
+                      metadata
+                    );
+                    const arr = Array.isArray(resp?.last_prices) ? resp.last_prices : [];
+                    if (arr[0]) {
+                      addPrice(lastPricesById, arr[0]);
+                      lastPrice = lastPricesById.get(instrumentId);
+                    }
+                  } catch {
+                    // ignore per-instrument error
+                  }
+                }
+
+                if (!Number.isFinite(closePrice) || (closePrice as number) === 0) {
+                  try {
+                    const resp: any = await grpcCall(
+                      marketDataClient.GetClosePrices.bind(marketDataClient),
+                      { instruments: [{ instrument_id: instrumentId }] },
+                      metadata
+                    );
+                    const arr = Array.isArray(resp?.close_prices) ? resp.close_prices : [];
+                    if (arr[0]) {
+                      addPrice(closePricesById, arr[0]);
+                      closePrice = closePricesById.get(instrumentId);
+                    }
+                  } catch {
+                    // ignore per-instrument error
+                  }
+                }
+
+                return {
+                  instrumentId,
+                  lastPrice,
+                  closePrice,
+                };
+              }
+            );
+
+            for (const item of pricePairs) {
+              if (!item) continue;
+              if (Number.isFinite(item.lastPrice)) {
+                lastPricesById.set(item.instrumentId, item.lastPrice as number);
+              }
+              if (Number.isFinite(item.closePrice)) {
+                closePricesById.set(item.instrumentId, item.closePrice as number);
+              }
+            }
+
+            missingDayPriceIds = uniqueInstrumentIds.filter((id) => {
               const last = lastPricesById.get(id);
               const close = closePricesById.get(id);
               return !(Number.isFinite(last) && Number.isFinite(close) && (close as number) !== 0);
             });
+          }
 
-            if (missingDayPriceIds.length && typeof marketDataClient.GetCandles === "function") {
+          const getCandles = marketDataClient.GetCandles;
+          if (missingDayPriceIds.length && typeof getCandles === "function") {
               const now = new Date();
               const from = new Date(now.getTime() - 1000 * 60 * 60 * 24 * 14);
               const fromSeconds = Math.floor(from.getTime() / 1000);
@@ -232,7 +505,7 @@ export function registerRoutes(app: Express, config: AppConfig): void {
                 8,
                 async (instrumentId) => {
                   const candlesResp: any = await grpcCallWithRetry(
-                    marketDataClient.GetCandles.bind(marketDataClient),
+                    getCandles.bind(marketDataClient),
                     {
                       instrument_id: instrumentId,
                       from: { seconds: fromSeconds, nanos: 0 },
@@ -283,19 +556,101 @@ export function registerRoutes(app: Express, config: AppConfig): void {
                   closePricesById.set(item.instrumentId, item.closePrice);
                 }
               }
+          }
+
+          // Prefer a real 24h baseline from hourly candles for mover analytics.
+          if (typeof getCandles === "function") {
+            const nowMs = Date.now();
+            const target24hMs = nowMs - DAY_MS;
+            const from24hMs = target24hMs - DAY_MS * 2;
+            const to24hMs = nowMs;
+            const candidate24hIds = uniqueInstrumentIds.filter((id) =>
+              Number.isFinite(lastPricesById.get(id))
+            );
+
+            const baseline24hRows = await mapLimit(candidate24hIds, 8, async (instrumentId) => {
+              const cached = movers24hBaselineCache.get(instrumentId);
+              if (
+                cached &&
+                nowMs - cached.updatedAt < MOVERS_24H_CACHE_TTL_MS &&
+                Number.isFinite(cached.price24h) &&
+                cached.price24h > 0
+              ) {
+                return { instrumentId, price24h: cached.price24h };
+              }
+
+              try {
+                const candlesResp: any = await grpcCallWithRetry(
+                  getCandles.bind(marketDataClient),
+                  {
+                    instrument_id: instrumentId,
+                    from: { seconds: Math.floor(from24hMs / 1000), nanos: 0 },
+                    to: { seconds: Math.floor(to24hMs / 1000), nanos: 0 },
+                    interval: "CANDLE_INTERVAL_HOUR",
+                  },
+                  metadata,
+                  1
+                );
+                const candles = Array.isArray(candlesResp?.candles) ? candlesResp.candles : [];
+                const points: Array<{ timeMs: number; price: number }> = [];
+                for (const candle of candles) {
+                  const seconds = Number(candle?.time?.seconds || 0);
+                  const nanos = Number(candle?.time?.nanos || 0);
+                  const startMs = seconds * 1000 + Math.floor(nanos / 1_000_000);
+                  if (!(startMs > 0)) continue;
+                  const open = toNumber(candle?.open);
+                  const close = toNumber(candle?.close);
+                  if (Number.isFinite(open) && open > 0) {
+                    points.push({ timeMs: startMs, price: open });
+                  }
+                  if (Number.isFinite(close) && close > 0) {
+                    points.push({ timeMs: startMs + HOUR_MS, price: close });
+                  }
+                }
+                if (!points.length) return null;
+                let best = points[0];
+                let bestDistance = Math.abs(best.timeMs - target24hMs);
+                for (let i = 1; i < points.length; i += 1) {
+                  const point = points[i];
+                  const distance = Math.abs(point.timeMs - target24hMs);
+                  if (distance < bestDistance) {
+                    best = point;
+                    bestDistance = distance;
+                  }
+                }
+                if (!Number.isFinite(best.price) || best.price <= 0) return null;
+                movers24hBaselineCache.set(instrumentId, {
+                  price24h: best.price,
+                  updatedAt: nowMs,
+                });
+                return {
+                  instrumentId,
+                  price24h: best.price,
+                };
+              } catch {
+                return null;
+              }
+            });
+
+            for (const row of baseline24hRows) {
+              if (!row || !Number.isFinite(row.price24h) || row.price24h <= 0) continue;
+              const existingClose = closePricesById.get(row.instrumentId);
+              if (Number.isFinite(existingClose) && (existingClose as number) > 0) {
+                continue;
+              }
+              closePricesById.set(row.instrumentId, row.price24h);
             }
-          } catch {
-            lastPricesById = new Map<string, number>();
-            closePricesById = new Map<string, number>();
           }
         }
 
-      const prettyPositions = await Promise.all(
-        positions.map(async (p) => {
+      const toPrettyPositions = async (source: any[]) =>
+        Promise.all(
+          source.map(async (p) => {
             const avg = toNumber(p.average_position_price);
             const cur = toNumber(p.current_price);
             const qty = toNumber(p.quantity);
             const instrumentId = String(p.instrument_uid || p.figi || "").trim();
+            const instrumentType = (p.instrument_type || "").toLowerCase();
             const currency =
               p.average_position_price?.currency ||
               p.current_price?.currency ||
@@ -306,8 +661,22 @@ export function registerRoutes(app: Express, config: AppConfig): void {
             const profit = curValue - buyValue;
             const profitPct = buyValue !== 0 ? (profit / buyValue) * 100 : 0;
 
+            const info = getInstrumentInfo(p) || { name: "" };
             const lastPrice = lastPricesById.get(instrumentId);
             const closePrice = closePricesById.get(instrumentId);
+            const nominalValue = toNumber(info.nominal);
+            const priceScale =
+              instrumentType === "bond"
+                ? nominalValue > 0
+                  ? nominalValue / 100
+                  : Number.isFinite(lastPrice) && (lastPrice as number) > 0 && cur > 0
+                    ? cur / (lastPrice as number)
+                    : 1
+                : 1;
+            const scaledLastPrice =
+              Number.isFinite(lastPrice) ? (lastPrice as number) * priceScale : undefined;
+            const scaledClosePrice =
+              Number.isFinite(closePrice) ? (closePrice as number) * priceScale : undefined;
             const hasDayPrices =
               Number.isFinite(lastPrice) &&
               Number.isFinite(closePrice) &&
@@ -316,10 +685,9 @@ export function registerRoutes(app: Express, config: AppConfig): void {
               ? (((lastPrice as number) - (closePrice as number)) / (closePrice as number)) * 100
               : null;
             const dayPriceChangeRub = hasDayPrices
-              ? ((lastPrice as number) - (closePrice as number))
+              ? ((scaledLastPrice as number) - (scaledClosePrice as number))
               : null;
 
-            const info = getInstrumentInfo(p) || { name: "" };
             const displayName = getDisplayName(p);
             let monthlyCoupon = "-";
             if ((p.instrument_type || "").toLowerCase() === "bond" && p.figi) {
@@ -351,15 +719,19 @@ export function registerRoutes(app: Express, config: AppConfig): void {
               dayChangePct:
                 dayChangePct === null ? "-" : formatPercent(dayChangePct),
               dayClosePriceRub:
-                closePrice === undefined ? "-" : formatMoney(closePrice, currency),
+                scaledClosePrice === undefined ? "-" : formatMoney(scaledClosePrice, currency),
               dayLastPriceRub:
-                lastPrice === undefined ? "-" : formatMoney(lastPrice, currency),
+                scaledLastPrice === undefined ? "-" : formatMoney(scaledLastPrice, currency),
               dayPriceAvailable: Boolean(hasDayPrices),
             };
           })
         );
 
+        const prettyPositions = await toPrettyPositions(positions);
+        const moverPositions = await toPrettyPositions(rawPositions);
+
         prettyPositions.sort((a, b) => a.name.localeCompare(b.name, "ru"));
+        moverPositions.sort((a, b) => a.name.localeCompare(b.name, "ru"));
 
       const totalCurrency = (portfolio.total_amount_portfolio?.currency || "RUB").toUpperCase();
       const totalCurrent = positions.reduce((sum, p) => {
@@ -377,7 +749,9 @@ export function registerRoutes(app: Express, config: AppConfig): void {
         res.json({
           total,
           positions: prettyPositions,
+          moverPositions,
         });
+        recordPortfolioMetrics(prettyPositions.length);
       } catch (e: any) {
         res.status(502).json({ error: e?.message || "Instrument lookup failed" });
       }
@@ -385,11 +759,18 @@ export function registerRoutes(app: Express, config: AppConfig): void {
   });
 
   app.post("/api/analytics", (req, res) => {
-    const tokenFromBody =
-      typeof req.body?.token === "string" ? req.body.token.trim() : "";
-    const token = tokenFromBody || defaultToken;
-    const accountId =
-      typeof req.body?.accountId === "string" ? req.body.accountId.trim() : "";
+    const parsed = accountScopedPayloadSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "Invalid payload",
+        details: mapZodIssues(parsed.error),
+      });
+      return;
+    }
+
+    const tokenFromBody = parsed.data.token || "";
+    const token = resolveToken(req, tokenFromBody);
+    const accountId = parsed.data.accountId;
 
     if (!token) {
       res.status(400).json({ error: "Missing token" });
@@ -397,6 +778,10 @@ export function registerRoutes(app: Express, config: AppConfig): void {
     }
     if (!accountId) {
       res.status(400).json({ error: "Missing accountId" });
+      return;
+    }
+    if (!canAccessAccount(req, accountId)) {
+      res.status(403).json({ error: "Forbidden: account access denied" });
       return;
     }
 
@@ -417,6 +802,20 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       const instrumentsClient = clients.createInstrumentsClient(endpoint);
 
       if (positions.length) {
+        const fetchBatchIfAvailable = async (
+          kind: string,
+          cacheKey: string
+        ): Promise<any[]> => {
+          const method = (instrumentsClient as any)?.[kind];
+          if (typeof method !== "function") return [];
+          return fetchInstrumentsBatch(
+            instrumentsClient,
+            metadata,
+            kind,
+            cacheKey
+          );
+        };
+
         const shares = await fetchInstrumentsBatch(
           instrumentsClient,
           metadata,
@@ -441,8 +840,84 @@ export function registerRoutes(app: Express, config: AppConfig): void {
           "Bonds",
           "bonds"
         );
-        const all = ([] as any[]).concat(shares, etfs, currencies, bonds);
+        const futures = await fetchBatchIfAvailable("Futures", "futures");
+        const options = await fetchBatchIfAvailable("Options", "options");
+        const all = ([] as any[]).concat(
+          shares,
+          etfs,
+          currencies,
+          bonds,
+          futures,
+          options
+        );
         upsertInstrumentCache(all);
+
+        const unresolvedRequests = new Map<string, { idType: string; id: string }>();
+        for (const position of positions) {
+          const info = getInstrumentInfo(position);
+          const type = String(position?.instrument_type || "").toLowerCase();
+          const hasName = getDisplayName(position) !== unknownDisplayName;
+          const hasSector = String(info?.sector || "").trim().length > 0;
+          const hasCountry = String(info?.countryOfRisk || "").trim().length > 0;
+          const hasCurrency =
+            String(info?.currency || info?.nominal?.currency || "").trim().length > 0;
+          const needsSector = type === "share" || type === "etf";
+          const needsCountry = type !== "futures" && type !== "option";
+          const needsDiversificationMeta =
+            !hasCurrency || (needsCountry && !hasCountry) || (needsSector && !hasSector);
+          if (hasName && !needsDiversificationMeta) continue;
+          const byUid = String(position?.instrument_uid || position?.instrumentUid || "").trim();
+          const byFigi = String(position?.figi || "").trim();
+          const byPositionUid = String(position?.position_uid || position?.positionUid || "").trim();
+
+          if (byUid) {
+            unresolvedRequests.set(`uid:${byUid}`, {
+              idType: "INSTRUMENT_ID_TYPE_UID",
+              id: byUid,
+            });
+          }
+          if (byFigi) {
+            unresolvedRequests.set(`figi:${byFigi}`, {
+              idType: "INSTRUMENT_ID_TYPE_FIGI",
+              id: byFigi,
+            });
+          }
+          if (byPositionUid) {
+            unresolvedRequests.set(`position_uid:${byPositionUid}`, {
+              idType: "INSTRUMENT_ID_TYPE_POSITION_UID",
+              id: byPositionUid,
+            });
+          }
+        }
+
+        const getInstrumentBy = (instrumentsClient as any)?.GetInstrumentBy;
+        if (unresolvedRequests.size > 0 && typeof getInstrumentBy === "function") {
+          const resolvedInstruments = await mapLimit(
+            Array.from(unresolvedRequests.values()),
+            6,
+            async ({ idType, id }) => {
+              try {
+                const resp: any = await grpcCallWithRetry(
+                  getInstrumentBy.bind(instrumentsClient),
+                  { id_type: idType, id },
+                  metadata,
+                  2
+                );
+                return resp?.instrument || null;
+              } catch {
+                return null;
+              }
+            }
+          );
+
+          const validResolved = resolvedInstruments.filter(
+            (instrument) => instrument && typeof instrument === "object"
+          );
+          if (validResolved.length > 0) {
+            upsertInstrumentCache(validResolved);
+          }
+        }
+
         persistInstrumentCaches();
       }
 
@@ -456,15 +931,29 @@ export function registerRoutes(app: Express, config: AppConfig): void {
         futures: "Фьючерсы",
         option: "Опционы",
       };
+      const typeIcons: Record<string, string> = {
+        share: "◉",
+        bond: "◍",
+        etf: "◔",
+        currency: "◌",
+        futures: "◈",
+        option: "◐",
+        other: "•",
+      };
+      const formatQuantity = (value: number): string =>
+        new Intl.NumberFormat("ru-RU", {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 4,
+        }).format(value);
 
-      const byType = positions.reduce((acc, p) => {
+      const byType: Record<string, number> = {};
+      for (const p of positions) {
         const cur = toNumber(p.current_price);
         const qty = toNumber(p.quantity);
         const curValue = cur * qty;
         const t = (p.instrument_type || "other").toLowerCase();
-        acc[t] = (acc[t] || 0) + curValue;
-        return acc;
-      }, {} as Record<string, number>);
+        byType[t] = (byType[t] || 0) + curValue;
+      }
 
       const holdings = positions.reduce(
         (acc, p) => {
@@ -485,11 +974,11 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       let fromSeconds = 946684800; // 2000-01-01
       try {
         const usersClient = clients.createUsersClient(endpoint);
-        const accountsResp: AccountsResponse = await grpcCall(
+        const accountsResp = (await grpcCall(
           usersClient.GetAccounts.bind(usersClient),
           {},
           metadata
-        );
+        )) as AccountsResponse;
         const acc = (accountsResp?.accounts || []).find((a: any) => a.id === accountId);
         if (acc?.opened_date?.seconds) {
           fromSeconds = Number(acc.opened_date.seconds);
@@ -499,8 +988,7 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       }
 
       const toSeconds = Math.floor(Date.now() / 1000);
-      const cashflows: Cashflow[] = [];
-      const receivedDividendOps: Array<{ time: number; amount: number }> = [];
+      const receivedDividendOps: Array<{ time: number; amount: number; ticker: string }> = [];
       const currentFigiSet = new Set(
         positions.map((p) => String(p?.figi || "").trim()).filter((v) => v.length > 0)
       );
@@ -511,6 +999,8 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       );
       const firstBuyByFigi = new Map<string, number>();
       const firstBuyByUid = new Map<string, number>();
+      const passiveIncomeByFigi = new Map<string, number>();
+      const passiveIncomeByUid = new Map<string, number>();
       let tradesNet = 0;
       let couponsIncome = 0;
       let dividendsIncome = 0;
@@ -530,6 +1020,19 @@ export function registerRoutes(app: Express, config: AppConfig): void {
           String(op?.instrument_uid ?? op?.instrumentUid ?? ""),
           String(op?.quantity ?? ""),
         ].join("|");
+      };
+      const resolveOpTicker = (op: any): string => {
+        const fromCatalog = getDisplayName(op);
+        if (fromCatalog && fromCatalog !== unknownDisplayName) return fromCatalog;
+        const ticker = String(op?.ticker || "").trim();
+        if (ticker) return ticker;
+        const nameCandidates = [op?.name, op?.instrument_name, op?.instrumentName];
+        for (const raw of nameCandidates) {
+          if (typeof raw !== "string") continue;
+          const value = raw.trim();
+          if (value && value.length > 1) return value;
+        }
+        return "Инструмент";
       };
 
       try {
@@ -609,15 +1112,6 @@ export function registerRoutes(app: Express, config: AppConfig): void {
           "OPERATION_TYPE_SELL_MARGIN",
           "OPERATION_TYPE_DELIVERY_SELL",
         ]);
-        const incomeTypes = new Set([
-          "OPERATION_TYPE_DIVIDEND",
-          "OPERATION_TYPE_COUPON",
-          "OPERATION_TYPE_BOND_REPAYMENT",
-          "OPERATION_TYPE_BOND_REPAYMENT_FULL",
-          "OPERATION_TYPE_DIVIDEND_TRANSFER",
-          "OPERATION_TYPE_OVERNIGHT",
-          "OPERATION_TYPE_ACCRUING_VARMARGIN",
-        ]);
         const receivedDividendTypes = new Set([
           "OPERATION_TYPE_DIVIDEND",
           "OPERATION_TYPE_DIVIDEND_TRANSFER",
@@ -653,28 +1147,6 @@ export function registerRoutes(app: Express, config: AppConfig): void {
           "OPERATION_TYPE_TAX_CORRECTION_COUPON",
         ]);
         const payoutTaxTypeIds = new Set([2, 5, 8, 11, 32, 33, 34, 36, 44]);
-        const expenseTypes = new Set([
-          "OPERATION_TYPE_TAX",
-          "OPERATION_TYPE_DIVIDEND_TAX",
-          "OPERATION_TYPE_BOND_TAX",
-          "OPERATION_TYPE_SERVICE_FEE",
-          "OPERATION_TYPE_BROKER_FEE",
-          "OPERATION_TYPE_SUCCESS_FEE",
-          "OPERATION_TYPE_TRACK_MFEE",
-          "OPERATION_TYPE_TRACK_PFEE",
-          "OPERATION_TYPE_MARGIN_FEE",
-          "OPERATION_TYPE_TAX_CORRECTION",
-          "OPERATION_TYPE_BENEFIT_TAX",
-          "OPERATION_TYPE_TAX_PROGRESSIVE",
-          "OPERATION_TYPE_BOND_TAX_PROGRESSIVE",
-          "OPERATION_TYPE_DIVIDEND_TAX_PROGRESSIVE",
-          "OPERATION_TYPE_BENEFIT_TAX_PROGRESSIVE",
-          "OPERATION_TYPE_TAX_CORRECTION_PROGRESSIVE",
-          "OPERATION_TYPE_TAX_REPO_PROGRESSIVE",
-          "OPERATION_TYPE_TAX_REPO",
-          "OPERATION_TYPE_TAX_REPO_HOLD",
-          "OPERATION_TYPE_WRITING_OFF_VARMARGIN",
-        ]);
         const isCommissionOperation = (opType: unknown, opTypeStr: string, opTypeNum: number): boolean =>
           commissionTypes.has(opType as string) ||
           commissionTypes.has(opTypeStr) ||
@@ -732,7 +1204,6 @@ export function registerRoutes(app: Express, config: AppConfig): void {
 
           const raw = toNumber(op?.payment);
           if (!Number.isFinite(raw) || raw === 0) continue;
-          const base = Math.abs(raw);
           const isBuy =
             buyTypes.has(opType) ||
             buyTypes.has(opTypeStr) ||
@@ -746,22 +1217,10 @@ export function registerRoutes(app: Express, config: AppConfig): void {
             opTypeNum === 22 ||
             opTypeNum === 29;
 
-          let signed: number;
-          if (isBuy) signed = -base;
-          else if (isSell) signed = base;
-          else if (incomeTypes.has(opType) || incomeTypes.has(opTypeStr)) signed = base;
-          else if (expenseTypes.has(opType) || expenseTypes.has(opTypeStr)) signed = -base;
-          else signed = raw;
-
-          cashflows.push({ time: seconds * 1000, amount: signed });
-
           const commission = Math.abs(toNumber(op?.commission));
           const commCurrency = (op?.commission?.currency || "").toUpperCase();
           const commissionFromField =
             commission && (!commCurrency || commCurrency === currency) ? commission : 0;
-          if (commissionFromField > 0 && !hasExplicitCommissionOps) {
-            cashflows.push({ time: seconds * 1000, amount: -commissionFromField });
-          }
 
           const isCouponIncome =
             couponIncomeTypes.has(opType) ||
@@ -790,9 +1249,23 @@ export function registerRoutes(app: Express, config: AppConfig): void {
           }
           if (isDividendIncome) {
             if (raw > 0) {
-              receivedDividendOps.push({ time: seconds * 1000, amount: raw });
+              receivedDividendOps.push({
+                time: seconds * 1000,
+                amount: raw,
+                ticker: resolveOpTicker(op),
+              });
             }
             dividendsIncome += raw;
+          }
+          if (isCouponIncome || isDividendIncome) {
+            const opFigi = String(op?.figi || "").trim();
+            const opUid = String(op?.instrument_uid || op?.instrumentUid || "").trim();
+            if (opFigi) {
+              passiveIncomeByFigi.set(opFigi, (passiveIncomeByFigi.get(opFigi) || 0) + raw);
+            }
+            if (opUid) {
+              passiveIncomeByUid.set(opUid, (passiveIncomeByUid.get(opUid) || 0) + raw);
+            }
           }
           if (isCommission) {
             // payment < 0 means fee charged, payment > 0 means refund
@@ -810,10 +1283,6 @@ export function registerRoutes(app: Express, config: AppConfig): void {
         // Keep analytics available even when operations history is temporarily unavailable.
       }
 
-      const finalValue = toNumber(portfolio.total_amount_portfolio);
-      cashflows.push({ time: Date.now(), amount: finalValue });
-      const xirrValue = xirr(cashflows);
-      const yieldPct = xirrValue === null ? null : xirrValue * 100;
       const operationProfit =
         totalCurrent +
         tradesNet +
@@ -825,11 +1294,14 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       const operationProfitPct =
         profitBase > 0 ? (operationProfit / profitBase) * 100 : 0;
 
-      const totalByType = Object.values(byType).reduce((s, v) => s + v, 0);
+      const totalByType = Object.values(byType).reduce(
+        (sum, value) => sum + Number(value || 0),
+        0
+      );
       const assetPie = Object.keys(byType)
         .sort()
         .map((k) => {
-          const value = byType[k];
+          const value = Number(byType[k] || 0);
           const pct = totalByType ? (value / totalByType) * 100 : 0;
           return {
             label: typeLabels[k] || k,
@@ -860,7 +1332,7 @@ export function registerRoutes(app: Express, config: AppConfig): void {
             })
             .sort((a, b) => b.value - a.value);
 
-          const value = byType[k];
+          const value = Number(byType[k] || 0);
           const pct = totalByType ? (value / totalByType) * 100 : 0;
           return {
             type: k,
@@ -871,13 +1343,260 @@ export function registerRoutes(app: Express, config: AppConfig): void {
             assets,
           };
         });
+      const sectorLabels: Record<string, string> = {
+        it: "Информационные технологии",
+        financial: "Финансы",
+        energy: "Энергетика",
+        materials: "Материалы",
+        industrials: "Промышленность и строительство",
+        telecom: "Коммуникации",
+        consumer: "Товары потребительского сектора",
+        health_care: "Здравоохранение",
+        real_estate: "Недвижимость",
+        utilities: "Коммунальные услуги",
+        electrocars: "Электромобили",
+        government: "Государственный сектор",
+        municipal: "Муниципальный сектор",
+        other: "Прочее",
+      };
+      const countryRegionLabels: Record<string, string> = {
+        US: "Северная Америка",
+        CA: "Северная Америка",
+        MX: "Северная Америка",
+        BR: "Латинская Америка",
+        AR: "Латинская Америка",
+        CL: "Латинская Америка",
+        CO: "Латинская Америка",
+        PE: "Латинская Америка",
+        VE: "Латинская Америка",
+        GB: "Великобритания",
+        DE: "Европа",
+        FR: "Европа",
+        IT: "Европа",
+        ES: "Европа",
+        NL: "Европа",
+        BE: "Европа",
+        LU: "Европа",
+        IE: "Европа",
+        CH: "Европа",
+        AT: "Европа",
+        NO: "Европа",
+        SE: "Европа",
+        DK: "Европа",
+        FI: "Европа",
+        PT: "Европа",
+        PL: "Развивающаяся Европа",
+        CZ: "Развивающаяся Европа",
+        HU: "Развивающаяся Европа",
+        RO: "Развивающаяся Европа",
+        BG: "Развивающаяся Европа",
+        RS: "Развивающаяся Европа",
+        HR: "Развивающаяся Европа",
+        SI: "Развивающаяся Европа",
+        UA: "Развивающаяся Европа",
+        RU: "Развивающаяся Европа",
+        BY: "Развивающаяся Европа",
+        KZ: "Развивающаяся Европа",
+        AM: "Развивающаяся Европа",
+        KG: "Развивающаяся Европа",
+        TJ: "Развивающаяся Европа",
+        UZ: "Развивающаяся Европа",
+        AZ: "Развивающаяся Европа",
+        GE: "Развивающаяся Европа",
+        GR: "Европа",
+        CY: "Европа",
+        EE: "Европа",
+        LV: "Европа",
+        LT: "Европа",
+        TR: "Развивающаяся Европа",
+        AE: "Ближний Восток и Африка",
+        SA: "Ближний Восток и Африка",
+        QA: "Ближний Восток и Африка",
+        KW: "Ближний Восток и Африка",
+        IL: "Ближний Восток и Африка",
+        EG: "Ближний Восток и Африка",
+        ZA: "Ближний Восток и Африка",
+        NG: "Ближний Восток и Африка",
+        CN: "Азия",
+        HK: "Азия",
+        JP: "Азия",
+        KR: "Азия",
+        TW: "Азия",
+        SG: "Азия",
+        IN: "Азия",
+        ID: "Азия",
+        MY: "Азия",
+        TH: "Азия",
+        VN: "Азия",
+        PH: "Азия",
+        AU: "Океания",
+        NZ: "Океания",
+      };
+      const normalizeCurrencyCode = (value: unknown): string => {
+        if (typeof value !== "string") return "";
+        const code = value.trim().toUpperCase();
+        if (!code) return "";
+        if (code === "RUR") return "RUB";
+        return code;
+      };
+      const normalizeCountryCode = (value: unknown): string => {
+        if (typeof value !== "string") return "";
+        return value.trim().toUpperCase();
+      };
+      const formatSectorLabel = (value: unknown, type: string): string => {
+        if (typeof value === "string") {
+          const key = value.trim().toLowerCase();
+          if (key) return sectorLabels[key] || "Сектор не определен";
+        }
+        if (type === "currency") return "Валютный рынок";
+        return "Сектор не определен";
+      };
+      const inferCountryMeta = (
+        input: { code: string; name: string; type: string; currencyCode: string; classCode: string; assetName: string }
+      ): { code: string; name: string } => {
+        if (input.code || input.name) {
+          return {
+            code: input.code,
+            name: input.name,
+          };
+        }
+        const normalizedClassCode = String(input.classCode || "").toUpperCase();
+        const looksRussianByClass =
+          normalizedClassCode.startsWith("TQ") ||
+          normalizedClassCode.startsWith("FQ") ||
+          normalizedClassCode.includes("SPBRU");
+        const looksRussianByName = /[А-Яа-яЁё]/.test(input.assetName);
+        const isLocalRubMarket = input.currencyCode === "RUB";
+        if (
+          input.type !== "currency" &&
+          (isLocalRubMarket || looksRussianByClass || looksRussianByName)
+        ) {
+          return {
+            code: "RU",
+            name: "Российская Федерация",
+          };
+        }
+        return { code: "", name: "" };
+      };
+      const resolveRegionLabel = (countryCode: string, type: string): string => {
+        if (countryCode) return countryRegionLabels[countryCode] || "Другие регионы";
+        if (type === "currency") return "Валютный рынок";
+        if (type === "futures" || type === "option") return "Срочный рынок";
+        return "Глобальный рынок";
+      };
+      const formatCountryLabel = (countryCode: string, countryName: string, type: string): string => {
+        if (countryName) return countryName;
+        if (countryCode) return countryCode;
+        if (type === "currency") return "Валютный рынок";
+        if (type === "futures" || type === "option") return "Срочный рынок";
+        return "Глобальный рынок";
+      };
+      const resolveAssetCurrency = (p: any, metaCurrency: string): string => {
+        const fromPosition = normalizeCurrencyCode(
+          p?.current_price?.currency || p?.average_position_price?.currency || p?.expected_yield?.currency
+        );
+        const fromMeta = normalizeCurrencyCode(metaCurrency);
+        return fromPosition || fromMeta || currency;
+      };
+      const myAssets = positions
+        .map((p, index) => {
+          const type = (p.instrument_type || "other").toLowerCase();
+          const meta = getInstrumentInfo(p);
+          const qty = toNumber(p.quantity);
+          const avg = toNumber(p.average_position_price);
+          const cur = toNumber(p.current_price);
+          const invested = avg * qty;
+          const currentValue = cur * qty;
+          const assetYield = currentValue - invested;
+          const figi = String(p?.figi || "").trim();
+          const uid = String(p?.instrument_uid || p?.instrumentUid || "").trim();
+          const passiveIncomeByFigiValue = figi ? passiveIncomeByFigi.get(figi) : undefined;
+          const passiveIncome =
+            passiveIncomeByFigiValue !== undefined
+              ? passiveIncomeByFigiValue
+              : uid
+                ? passiveIncomeByUid.get(uid) || 0
+                : 0;
+          const profitValue = assetYield + passiveIncome;
+          const yieldPct = invested !== 0 ? (profitValue / invested) * 100 : 0;
+          const portfolioSharePct = totalCurrent > 0 ? (currentValue / totalCurrent) * 100 : 0;
+          const name = getDisplayName(p);
+          const rawCountryCode = normalizeCountryCode(meta?.countryOfRisk);
+          const rawCountryName =
+            typeof meta?.countryOfRiskName === "string" ? meta.countryOfRiskName.trim() : "";
+          const currencyCode = resolveAssetCurrency(p, meta?.currency || meta?.nominal?.currency || "");
+          const inferredCountry = inferCountryMeta({
+            code: rawCountryCode,
+            name: rawCountryName,
+            type,
+            currencyCode,
+            classCode: String(meta?.classCode || ""),
+            assetName: name || "",
+          });
+          const countryCode = inferredCountry.code || rawCountryCode;
+          const countryName = inferredCountry.name || rawCountryName;
+          return {
+            id: `asset-${index + 1}`,
+            type,
+            assetClassLabel: typeLabels[type] || "Прочее",
+            icon: typeIcons[type] || typeIcons.other,
+            name: name || "Название недоступно",
+            currencyCode,
+            sectorLabel: formatSectorLabel(meta?.sector, type),
+            countryCode,
+            countryLabel: formatCountryLabel(countryCode, countryName, type),
+            regionLabel: resolveRegionLabel(countryCode, type),
+            quantity: qty,
+            quantityText: formatQuantity(qty),
+            invested,
+            investedText: formatMoney(invested, currency),
+            currentValue,
+            currentValueText: formatMoney(currentValue, currency),
+            passiveIncome,
+            passiveIncomeText: formatMoney(passiveIncome, currency),
+            assetYield,
+            assetYieldText: formatMoney(assetYield, currency),
+            profitValue,
+            profitText: formatMoney(profitValue, currency),
+            yieldPct,
+            yieldPctText: formatPercent(yieldPct),
+            portfolioSharePct,
+            portfolioSharePctText: formatPercent(portfolioSharePct),
+          };
+        })
+        .sort((a, b) => b.currentValue - a.currentValue);
+      const myAssetsTotals = myAssets.reduce(
+        (acc, asset) => {
+          acc.quantity += asset.quantity;
+          acc.invested += asset.invested;
+          acc.currentValue += asset.currentValue;
+          acc.passiveIncome += asset.passiveIncome;
+          acc.assetYield += asset.assetYield;
+          acc.profitValue += asset.profitValue;
+          acc.portfolioSharePct += asset.portfolioSharePct;
+          return acc;
+        },
+        {
+          quantity: 0,
+          invested: 0,
+          currentValue: 0,
+          passiveIncome: 0,
+          assetYield: 0,
+          profitValue: 0,
+          portfolioSharePct: 0,
+        }
+      );
+      const myAssetsYieldPct =
+        myAssetsTotals.invested !== 0 ? (myAssetsTotals.profitValue / myAssetsTotals.invested) * 100 : 0;
 
       const bondCompaniesMap = new Map<string, number>();
       for (const p of positions) {
         if ((p.instrument_type || "").toLowerCase() !== "bond") continue;
         const name = getDisplayName(p);
         const company =
-          name === "Название недоступно" ? "Неизвестный эмитент" : normalizeBondCompany(name);
+          name === unknownDisplayName
+            ? "Неизвестный эмитент"
+            : normalizeBondCompany(name);
         const cur = toNumber(p.current_price);
         const qty = toNumber(p.quantity);
         const curValue = cur * qty;
@@ -915,6 +1634,10 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       };
 
       const next12Map = new Map<string, number>();
+      const next12DetailsMap = new Map<
+        string,
+        Array<{ ticker: string; eventType: string; amount: number }>
+      >();
       const y2026Map = new Map<string, number>();
       const upcomingEvents: Array<{
         date: string;
@@ -922,6 +1645,10 @@ export function registerRoutes(app: Express, config: AppConfig): void {
         eventType: string;
         amount: string;
         timestamp: number;
+        quantity: number;
+        quantityText: string;
+        perAssetValue: number;
+        perAssetAmount: string;
       }> = [];
       let couponNext12Total = 0;
       let bondTotalCurrent = 0;
@@ -932,6 +1659,18 @@ export function registerRoutes(app: Express, config: AppConfig): void {
         String(d.getMonth() + 1).padStart(2, "0") +
         "." +
         d.getFullYear();
+      const pushNext12Detail = (
+        key: string,
+        ticker: string,
+        eventType: string,
+        amount: number
+      ): void => {
+        const name = String(ticker || "").trim();
+        if (!name || !Number.isFinite(amount) || amount <= 0) return;
+        const rows = next12DetailsMap.get(key) || [];
+        rows.push({ ticker: name, eventType, amount });
+        next12DetailsMap.set(key, rows);
+      };
 
       await mapLimit(positions, 5, async (p) => {
         const figi = p.figi;
@@ -1004,6 +1743,7 @@ export function registerRoutes(app: Express, config: AppConfig): void {
             if (dt >= now && dt <= endNext12) {
               next12Map.set(key, (next12Map.get(key) || 0) + amount);
               couponNext12Total += amount;
+              pushNext12Detail(key, getDisplayName(p), "Купон", amount);
             }
             if (dt >= now && dt <= nextWeekEnd) {
               upcomingEvents.push({
@@ -1012,6 +1752,10 @@ export function registerRoutes(app: Express, config: AppConfig): void {
                 eventType: "Купон",
                 amount: formatMoney(amount, currency),
                 timestamp: dt.getTime(),
+                quantity: qty,
+                quantityText: formatQuantity(qty),
+                perAssetValue: qty > 0 ? amount / qty : 0,
+                perAssetAmount: formatMoney(qty > 0 ? amount / qty : 0, currency),
               });
             }
             if (dt >= start2026 && dt <= end2026) {
@@ -1051,6 +1795,7 @@ export function registerRoutes(app: Express, config: AppConfig): void {
             const key = monthKey(dt);
             if (dt >= now && dt <= endNext12) {
               next12Map.set(key, (next12Map.get(key) || 0) + amount);
+              pushNext12Detail(key, getDisplayName(p), "Дивиденд", amount);
             }
             if (dt >= now && dt <= nextWeekEnd) {
               upcomingEvents.push({
@@ -1059,6 +1804,10 @@ export function registerRoutes(app: Express, config: AppConfig): void {
                 eventType: "Дивиденд",
                 amount: formatMoney(amount, currency),
                 timestamp: dt.getTime(),
+                quantity: qty,
+                quantityText: formatQuantity(qty),
+                perAssetValue: qty > 0 ? amount / qty : 0,
+                perAssetAmount: formatMoney(qty > 0 ? amount / qty : 0, currency),
               });
             }
             if (dt >= start2026 && dt <= end2026) {
@@ -1085,6 +1834,21 @@ export function registerRoutes(app: Express, config: AppConfig): void {
         value: next12Map.get(k) || 0,
         amount: formatMoney(next12Map.get(k) || 0, currency),
       }));
+      const incomeNext12Details = next12Keys.map((k) => {
+        const rows = (next12DetailsMap.get(k) || [])
+          .slice()
+          .sort((a, b) => b.amount - a.amount)
+          .map((item) => ({
+            ticker: item.ticker,
+            eventType: item.eventType,
+            amount: item.amount,
+            amountText: formatMoney(item.amount, currency),
+          }));
+        return {
+          month: monthLabel(k),
+          items: rows,
+        };
+      });
       const passiveIncomeTotal = incomeNext12.reduce((sum, row) => sum + row.value, 0);
       const passiveBaseValue = positions.reduce((sum, p) => {
         const type = (p.instrument_type || "").toLowerCase();
@@ -1099,23 +1863,49 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       const dividendsStart = new Date(now.getFullYear(), now.getMonth() - 11, 1);
       const dividends12Keys = buildMonthList(dividendsStart, 12);
       const dividends12Map = new Map<string, number>();
+      const dividends12DetailsMap = new Map<
+        string,
+        Array<{ ticker: string; eventType: string; amount: number }>
+      >();
       for (const op of receivedDividendOps) {
         const dt = new Date(op.time);
         if (dt < dividendsStart || dt > now) continue;
         const key = monthKey(dt);
         dividends12Map.set(key, (dividends12Map.get(key) || 0) + op.amount);
+        const ticker = String(op.ticker || "").trim();
+        if (ticker && op.amount > 0) {
+          const rows = dividends12DetailsMap.get(key) || [];
+          rows.push({ ticker, eventType: "Дивиденд", amount: op.amount });
+          dividends12DetailsMap.set(key, rows);
+        }
       }
       const receivedDividends12 = dividends12Keys.map((k) => ({
         month: monthLabel(k),
         value: dividends12Map.get(k) || 0,
         amount: formatMoney(dividends12Map.get(k) || 0, currency),
       }));
+      const receivedDividends12Details = dividends12Keys.map((k) => {
+        const rows = (dividends12DetailsMap.get(k) || [])
+          .slice()
+          .sort((a, b) => b.amount - a.amount)
+          .map((item) => ({
+            ticker: item.ticker,
+            eventType: item.eventType,
+            amount: item.amount,
+            amountText: formatMoney(item.amount, currency),
+          }));
+        return {
+          month: monthLabel(k),
+          items: rows,
+        };
+      });
 
       const redemptionMap = new Map<string, number>();
       const redemptionsDetails: Array<{ month: string; name: string; amount: string }> = [];
       for (const p of positions) {
         if ((p.instrument_type || "").toLowerCase() !== "bond") continue;
-        const meta = getInstrumentInfo(p) || {};
+        const meta = getInstrumentInfo(p);
+        if (!meta) continue;
         const maturityMs = meta.maturityMs || 0;
         if (!maturityMs) continue;
         const dt = new Date(maturityMs);
@@ -1139,6 +1929,10 @@ export function registerRoutes(app: Express, config: AppConfig): void {
             eventType: "Погашение",
             amount: formatMoney(value, currency),
             timestamp: dt.getTime(),
+            quantity: qty,
+            quantityText: formatQuantity(qty),
+            perAssetValue: qty > 0 ? value / qty : 0,
+            perAssetAmount: formatMoney(qty > 0 ? value / qty : 0, currency),
           });
         }
       }
@@ -1154,6 +1948,7 @@ export function registerRoutes(app: Express, config: AppConfig): void {
       upcomingEvents.sort((a, b) => a.timestamp - b.timestamp);
 
       res.json({
+        currency,
         total: formatMoney(totalCurrent, currency),
         profitRub: formatMoney(operationProfit, currency),
         profitValue: operationProfit,
@@ -1175,17 +1970,42 @@ export function registerRoutes(app: Express, config: AppConfig): void {
           marketProfitPct: formatPercent(marketProfitPct),
         },
         yieldPct: safePercent(couponYieldPct),
+        yieldIncomeValue: couponNext12Total,
+        yieldIncomeRub: formatMoney(couponNext12Total, currency),
+        yieldBaseValue: bondTotalCurrent,
+        yieldBaseRub: formatMoney(bondTotalCurrent, currency),
         assetPie,
         assetBreakdown,
+        myAssets,
+        myAssetsTotals: {
+          quantity: myAssetsTotals.quantity,
+          quantityText: formatQuantity(myAssetsTotals.quantity),
+          invested: myAssetsTotals.invested,
+          investedText: formatMoney(myAssetsTotals.invested, currency),
+          currentValue: myAssetsTotals.currentValue,
+          currentValueText: formatMoney(myAssetsTotals.currentValue, currency),
+          passiveIncome: myAssetsTotals.passiveIncome,
+          passiveIncomeText: formatMoney(myAssetsTotals.passiveIncome, currency),
+          assetYield: myAssetsTotals.assetYield,
+          assetYieldText: formatMoney(myAssetsTotals.assetYield, currency),
+          profitValue: myAssetsTotals.profitValue,
+          profitText: formatMoney(myAssetsTotals.profitValue, currency),
+          yieldPct: myAssetsYieldPct,
+          yieldPctText: formatPercent(myAssetsYieldPct),
+          portfolioSharePct: myAssetsTotals.portfolioSharePct,
+          portfolioSharePctText: formatPercent(myAssetsTotals.portfolioSharePct),
+        },
         bondCompanies,
         bondCompaniesCount: "Компаний: " + String(bondCompanies.length),
         incomeNext12,
+        incomeNext12Details,
         passiveIncomeTotal,
         passiveIncomeTotalRub: formatMoney(passiveIncomeTotal, currency),
         passiveIncomeBaseValue: passiveBaseValue,
         passiveIncomeBaseRub: formatMoney(passiveBaseValue, currency),
         passiveIncomeYieldPct: formatPercent(passiveIncomeYieldPct),
         receivedDividends12,
+        receivedDividends12Details,
         redemptionsNext12,
         redemptionsDetails,
         upcomingEvents: upcomingEvents.map((e) => ({
@@ -1193,8 +2013,13 @@ export function registerRoutes(app: Express, config: AppConfig): void {
           name: e.name,
           eventType: e.eventType,
           amount: e.amount,
+          quantity: e.quantity,
+          quantityText: e.quantityText,
+          perAssetValue: e.perAssetValue,
+          perAssetAmount: e.perAssetAmount,
         })),
       });
+      recordAnalyticsMetrics(assetPie.length, incomeNext12.length);
     });
   });
 
@@ -1205,34 +2030,112 @@ export function registerRoutes(app: Express, config: AppConfig): void {
     res.json({ ok: true });
   });
 
-  app.post("/api/names/refresh", async (_req, res) => {
+  app.post("/api/names/refresh", async (req, res) => {
     try {
-      clearInstrumentCaches();
-      if (!defaultToken) {
+      const parsed = accountsPayloadSchema.safeParse(req.body || {});
+      if (!parsed.success) {
+        res.status(400).json({
+          ok: false,
+          error: "Invalid payload",
+          details: mapZodIssues(parsed.error),
+        });
+        return;
+      }
+
+      const tokenFromBody = parsed.data.token || "";
+      const token = resolveToken(req, tokenFromBody);
+
+      if (!token) {
         res.status(400).json({ ok: false, error: "Missing token" });
         return;
       }
       const instrumentsClient = clients.createInstrumentsClient(endpoint);
-      const metadata = buildAuthMetadata(defaultToken || "", appName);
-
-      await fetchInstrumentsBatch(instrumentsClient, metadata, "Shares", "shares");
-      await fetchInstrumentsBatch(instrumentsClient, metadata, "Etfs", "etfs");
-      await fetchInstrumentsBatch(instrumentsClient, metadata, "Currencies", "currencies");
-      await fetchInstrumentsBatch(instrumentsClient, metadata, "Bonds", "bonds");
+      const metadata = buildAuthMetadata(token, appName);
+      const fetchBatchIfAvailable = async (
+        kind: string,
+        cacheKey: string
+      ): Promise<{
+        kind: string;
+        cacheKey: string;
+        status: "ok" | "skipped" | "error";
+        count: number;
+        error?: string;
+      }> => {
+        const method = (instrumentsClient as any)?.[kind];
+        if (typeof method !== "function") {
+          return {
+            kind,
+            cacheKey,
+            status: "skipped",
+            count: 0,
+          };
+        }
+        try {
+          const list = await fetchInstrumentsBatch(
+            instrumentsClient,
+            metadata,
+            kind,
+            cacheKey,
+            { forceRefresh: true, throwOnError: true }
+          );
+          return {
+            kind,
+            cacheKey,
+            status: "ok",
+            count: Array.isArray(list) ? list.length : 0,
+          };
+        } catch (error: any) {
+          return {
+            kind,
+            cacheKey,
+            status: "error",
+            count: 0,
+            error: error?.message || "refresh failed",
+          };
+        }
+      };
+      const batches = [
+        await fetchBatchIfAvailable("Shares", "shares"),
+        await fetchBatchIfAvailable("Etfs", "etfs"),
+        await fetchBatchIfAvailable("Currencies", "currencies"),
+        await fetchBatchIfAvailable("Bonds", "bonds"),
+        await fetchBatchIfAvailable("Futures", "futures"),
+        await fetchBatchIfAvailable("Options", "options"),
+      ];
 
       const all = ([] as any[]).concat(
         instrumentBatchCache.get("shares") || [],
         instrumentBatchCache.get("etfs") || [],
         instrumentBatchCache.get("currencies") || [],
-        instrumentBatchCache.get("bonds") || []
+        instrumentBatchCache.get("bonds") || [],
+        instrumentBatchCache.get("futures") || [],
+        instrumentBatchCache.get("options") || []
       );
 
       const updated = upsertInstrumentCache(all);
-
       persistInstrumentCaches();
-      res.json({ ok: true, updated });
+      const requiredKinds = new Set(["Shares", "Etfs", "Currencies", "Bonds", "Futures"]);
+      const failures = batches.filter(
+        (item) => item.status === "error" && requiredKinds.has(item.kind)
+      );
+      const warnings = batches.filter(
+        (item) => item.status === "error" && !requiredKinds.has(item.kind)
+      );
+      res.json({
+        ok: failures.length === 0,
+        updated,
+        totalInstruments: all.length,
+        warnings: warnings.length,
+        batches,
+      });
     } catch (e: any) {
       res.status(500).json({ ok: false, error: e?.message || "Refresh failed" });
     }
   });
+
+  if (useReactUi) {
+    app.get(/^\/(?!api\/|metrics$|legacy(?:\/|$)).*/, (_req, res) => {
+      res.sendFile(frontendIndexPath);
+    });
+  }
 }

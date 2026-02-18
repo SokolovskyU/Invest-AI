@@ -3,8 +3,11 @@ node_modules/
 
 # Build artifacts
 dist/
+web/dist/
 build/
 coverage/
+playwright-report/
+test-results/
 
 # Environment and local secrets
 .env
@@ -23,6 +26,7 @@ pnpm-debug.log*
 .temp/
 tmp/
 temp/
+.temp_app_dump.txt
 
 # TypeScript / tooling
 *.tsbuildinfo

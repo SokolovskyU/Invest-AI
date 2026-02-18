@@ -1,11 +1,6 @@
-export type LogLevel = "debug" | "info" | "warn" | "error";
+import pino from "pino";
 
-const levelOrder: Record<LogLevel, number> = {
-  debug: 10,
-  info: 20,
-  warn: 30,
-  error: 40,
-};
+export type LogLevel = "debug" | "info" | "warn" | "error";
 
 function getLogLevel(): LogLevel {
   const raw = (process.env.TINVEST_LOG_LEVEL || "info").toLowerCase();
@@ -15,40 +10,34 @@ function getLogLevel(): LogLevel {
   return "info";
 }
 
-function shouldLog(level: LogLevel): boolean {
-  return levelOrder[level] >= levelOrder[getLogLevel()];
-}
+const logger = pino({
+  level: getLogLevel(),
+  base: undefined,
+  timestamp: pino.stdTimeFunctions.isoTime,
+});
 
-function formatMessage(level: LogLevel, msg: string, extra?: Record<string, unknown>) {
-  const base: Record<string, unknown> = {
-    ts: new Date().toISOString(),
-    level,
-    msg,
-  };
+function withMessage(msg: string, extra?: Record<string, unknown>): Record<string, unknown> {
+  const base: Record<string, unknown> = { msg };
   if (extra) {
     for (const [k, v] of Object.entries(extra)) {
       base[k] = v;
     }
   }
-  return JSON.stringify(base);
+  return base;
 }
 
 export function logDebug(msg: string, extra?: Record<string, unknown>): void {
-  if (!shouldLog("debug")) return;
-  console.log(formatMessage("debug", msg, extra));
+  logger.debug(withMessage(msg, extra));
 }
 
 export function logInfo(msg: string, extra?: Record<string, unknown>): void {
-  if (!shouldLog("info")) return;
-  console.log(formatMessage("info", msg, extra));
+  logger.info(withMessage(msg, extra));
 }
 
 export function logWarn(msg: string, extra?: Record<string, unknown>): void {
-  if (!shouldLog("warn")) return;
-  console.warn(formatMessage("warn", msg, extra));
+  logger.warn(withMessage(msg, extra));
 }
 
 export function logError(msg: string, extra?: Record<string, unknown>): void {
-  if (!shouldLog("error")) return;
-  console.error(formatMessage("error", msg, extra));
+  logger.error(withMessage(msg, extra));
 }

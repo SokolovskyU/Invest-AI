@@ -36,6 +36,15 @@ const mockOperationsClient = {
           current_price: { units: "550", nano: 0, currency: "RUB" },
           expected_yield: { units: "100", nano: 0, currency: "RUB" },
         },
+        {
+          figi: "BLOCKEDFIGI1",
+          instrument_type: "share",
+          blocked: true,
+          quantity: { units: "3", nano: 0 },
+          average_position_price: { units: "100", nano: 0, currency: "RUB" },
+          current_price: { units: "120", nano: 0, currency: "RUB" },
+          expected_yield: { units: "60", nano: 0, currency: "RUB" },
+        },
       ],
     });
   },
@@ -79,7 +88,17 @@ const mockOperationsClient = {
 };
 
 const mockInstrumentsClient = {
-  Shares: (_req: any, _md: any, cb: any) => cb(null, { instruments: [] }),
+  Shares: (_req: any, _md: any, cb: any) =>
+    cb(null, {
+      instruments: [
+        {
+          figi: "BLOCKEDFIGI1",
+          name: "Blocked Share",
+          risk_level: "RISK_LEVEL_MODERATE",
+          instrument_type: "share",
+        },
+      ],
+    }),
   Etfs: (_req: any, _md: any, cb: any) => cb(null, { instruments: [] }),
   Currencies: (_req: any, _md: any, cb: any) => cb(null, { instruments: [] }),
   Bonds: (_req: any, _md: any, cb: any) =>
@@ -108,8 +127,40 @@ const mockInstrumentsClient = {
 };
 
 const mockMarketDataClient = {
-  GetLastPrices: (_req: any, _md: any, cb: any) => cb(null, { last_prices: [] }),
-  GetClosePrices: (_req: any, _md: any, cb: any) => cb(null, { close_prices: [] }),
+  GetLastPrices: (req: any, _md: any, cb: any) => {
+    const ids = Array.isArray(req?.instrument_id) ? req.instrument_id : [];
+    if (ids.length > 1 && ids.includes("BLOCKEDFIGI1")) {
+      cb({ message: "invalid instrument_id" });
+      return;
+    }
+    const rows = ids
+      .map((id: string) => {
+        if (id === "TCS00A10D1W2") {
+          return { instrument_uid: id, figi: id, price: { units: "550", nano: 0 } };
+        }
+        return null;
+      })
+      .filter(Boolean);
+    cb(null, { last_prices: rows });
+  },
+  GetClosePrices: (req: any, _md: any, cb: any) => {
+    const ids = Array.isArray(req?.instruments)
+      ? req.instruments.map((i: any) => String(i?.instrument_id || ""))
+      : [];
+    if (ids.length > 1 && ids.includes("BLOCKEDFIGI1")) {
+      cb({ message: "invalid instrument_id" });
+      return;
+    }
+    const rows = ids
+      .map((id: string) => {
+        if (id === "TCS00A10D1W2") {
+          return { instrument_uid: id, figi: id, price: { units: "540", nano: 0 } };
+        }
+        return null;
+      })
+      .filter(Boolean);
+    cb(null, { close_prices: rows });
+  },
   GetCandles: (_req: any, _md: any, cb: any) =>
     cb(null, {
       candles: [
@@ -159,10 +210,18 @@ async function run() {
   assert.ok(body.total);
   assert.ok(body.assetPie);
   assert.ok(body.assetBreakdown);
+  assert.ok(Array.isArray(body.myAssets));
+  assert.ok(body.myAssets.length > 0);
+  assert.ok(body.myAssetsTotals);
   assert.ok(body.bondCompanies);
   assert.ok(body.incomeNext12);
+  assert.ok(Array.isArray(body.incomeNext12Details));
   assert.ok(body.redemptionsNext12);
   assert.ok(body.redemptionsDetails);
+  assert.equal(typeof body.yieldIncomeValue, "number");
+  assert.equal(typeof body.yieldIncomeRub, "string");
+  assert.equal(typeof body.yieldBaseValue, "number");
+  assert.equal(typeof body.yieldBaseRub, "string");
   assert.equal(body.profitBreakdown.commissions, 10);
   assert.equal(body.profitBreakdown.taxes, 40);
 
@@ -179,8 +238,24 @@ async function run() {
   const portfolioBody = await portfolioRes.json();
   assert.ok(Array.isArray(portfolioBody.positions));
   assert.equal(portfolioBody.positions.length, 1);
+  assert.ok(Array.isArray(portfolioBody.moverPositions));
+  assert.equal(portfolioBody.moverPositions.length, 2);
+  assert.equal(
+    portfolioBody.moverPositions.some((row: any) => row.name === "Blocked Share"),
+    true
+  );
   assert.equal(portfolioBody.positions[0].dayPriceAvailable, true);
-  assert.equal(portfolioBody.positions[0].dayChangePct, "1,85%");
+  assert.equal(String(portfolioBody.positions[0].dayChangePct || "").replace(",", "."), "1.85%");
+
+  const invalidPayloadRes = await fetch(`http://127.0.0.1:${port}/api/portfolio`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ accountId: 123 }),
+  });
+  assert.equal(invalidPayloadRes.status, 400);
+  const invalidPayloadBody = await invalidPayloadRes.json();
+  assert.equal(invalidPayloadBody.error, "Invalid payload");
+  assert.equal(Array.isArray(invalidPayloadBody.details), true);
 
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }

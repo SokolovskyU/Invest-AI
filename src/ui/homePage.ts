@@ -693,7 +693,7 @@ export function renderHomePage(): string {
         <input id="account" list="accounts" placeholder="account_id" />
         <datalist id="accounts"></datalist>
         <button id="load">Счета</button>
-        <button id="rememberBtn">Запомнить токен</button>
+        <button id="rememberBtn">Сохранить токен (сессия)</button>
       </div>
     </header>
 
@@ -834,10 +834,8 @@ export function renderHomePage(): string {
         donutRowsByType: {},
         donutAnimRaf: 0,
         movers: { up: [], down: [] },
-        savedToken:
-          localStorage.getItem("tinvest_token") ||
-          sessionStorage.getItem("tinvest_token_session") ||
-          "",
+        moverRows: [],
+        savedToken: sessionStorage.getItem("tinvest_token_session") || "",
         portfolioTotalText: "-",
         portfolioTotalValue: 0,
         investedTotal: 0,
@@ -859,7 +857,7 @@ export function renderHomePage(): string {
       };
 
       const CACHE_KEYS = {
-        portfolio: "home_portfolio_cache_v12",
+        portfolio: "home_portfolio_cache_v14",
         accounts: "home_accounts_cache_v1"
       };
 
@@ -963,8 +961,17 @@ export function renderHomePage(): string {
         }
       }
 
+      async function syncServerToken(rawToken) {
+        const token = String(rawToken || "").trim();
+        if (!token) {
+          await postJsonWithTimeout("/api/session/logout", {}, 10000);
+          return;
+        }
+        await postJsonWithTimeout("/api/session/token", { token }, 10000);
+      }
+
       function mapPositionsToRows(positions) {
-        const mapped = positions.slice(0, 50).map((position) => {
+        const mapped = positions.map((position) => {
           const cost = parseNumberFromText(position.currentPrice);
           const profit = parseNumberFromText(position.profitRub);
           const dayChange = parseNumberFromText(
@@ -1445,49 +1452,56 @@ export function renderHomePage(): string {
       }
 
       function buildMovers() {
-        const sortable = state.positionRows
-          .map((row) => {
-            const closePrice24h = Number(row.closePrice24h) || 0;
-            const currentPriceNow = Number(row.currentPriceNow) || 0;
-            if (!(closePrice24h > 0 && currentPriceNow > 0)) return null;
+        const selectMovers = (rows) => {
+          const sortable = rows
+            .map((row) => {
+              const closePrice24h = Number(row.closePrice24h) || 0;
+              const currentPriceNow = Number(row.currentPriceNow) || 0;
+              if (!(closePrice24h > 0 && currentPriceNow > 0)) return null;
 
-            const dayChangeFromPrices = currentPriceNow - closePrice24h;
-            const dayChangePctFromPrices = closePrice24h !== 0
-              ? (dayChangeFromPrices / closePrice24h) * 100
-              : 0;
+              const dayChangeFromPrices = currentPriceNow - closePrice24h;
+              const dayChangePctFromPrices = closePrice24h !== 0
+                ? (dayChangeFromPrices / closePrice24h) * 100
+                : 0;
 
-            const rowPct = Number(row.dayChangePct) || 0;
-            const rowChange = Number(row.dayChange) || 0;
-            const dayChangePct =
-              Math.abs(rowPct) > 0.000001 ? rowPct : dayChangePctFromPrices;
-            const dayChange =
-              Math.abs(rowChange) > 0.000001 ? rowChange : dayChangeFromPrices;
+              const rowPct = Number(row.dayChangePct) || 0;
+              const rowChange = Number(row.dayChange) || 0;
+              const dayChangePct =
+                Math.abs(rowPct) > 0.000001 ? rowPct : dayChangePctFromPrices;
+              const dayChange =
+                Math.abs(rowChange) > 0.000001 ? rowChange : dayChangeFromPrices;
 
-            return {
-              name: row.name,
-              dayChangePct,
-              dayChange,
-              closePrice24h,
-              currentPriceNow
-            };
-          })
-          .filter((row) => Boolean(row));
+              return {
+                name: row.name,
+                dayChangePct,
+                dayChange,
+                closePrice24h,
+                currentPriceNow
+              };
+            })
+            .filter((row) => Boolean(row));
 
-        const byGrowth = sortable
-          .slice()
-          .sort((a, b) => (b.dayChangePct - a.dayChangePct) || (b.dayChange - a.dayChange));
-        const byDecline = sortable
-          .slice()
-          .sort((a, b) => (a.dayChangePct - b.dayChangePct) || (a.dayChange - b.dayChange));
+          const byGrowth = sortable
+            .slice()
+            .sort((a, b) => (b.dayChangePct - a.dayChangePct) || (b.dayChange - a.dayChange));
+          const byDecline = sortable
+            .slice()
+            .sort((a, b) => (a.dayChangePct - b.dayChangePct) || (a.dayChange - b.dayChange));
 
-        let up = byGrowth.filter((row) => row.dayChangePct > 0 || row.dayChange > 0).slice(0, 5);
-        let down = byDecline.filter((row) => row.dayChangePct < 0 || row.dayChange < 0).slice(0, 5);
+          let up = byGrowth.filter((row) => row.dayChangePct > 0 || row.dayChange > 0).slice(0, 5);
+          let down = byDecline.filter((row) => row.dayChangePct < 0 || row.dayChange < 0).slice(0, 5);
 
-        if (!up.length) up = byGrowth.slice(0, 5);
-        if (!down.length) down = byDecline.slice(0, 5);
+          if (!up.length) up = byGrowth.slice(0, 5);
+          if (!down.length) down = byDecline.slice(0, 5);
 
-        state.movers.up = up;
-        state.movers.down = down;
+          return { up, down };
+        };
+
+        const primary = selectMovers(state.positionRows || []);
+        const fallback = selectMovers(state.moverRows || []);
+
+        state.movers.up = primary.up.length ? primary.up : fallback.up;
+        state.movers.down = primary.down.length ? primary.down : fallback.down;
       }
 
       function renderMoverList(container, items, emptyText) {
@@ -1540,6 +1554,37 @@ export function renderHomePage(): string {
         statusEl.textContent = text;
       }
 
+      function withTimeoutResult(promise, timeoutMs) {
+        return Promise.race([
+          promise.then((value) => ({ timedOut: false, value })),
+          new Promise((resolve) =>
+            setTimeout(() => resolve({ timedOut: true, value: false }), timeoutMs)
+          )
+        ]);
+      }
+
+      async function postJsonWithTimeout(url, payload, timeoutMs = 15000) {
+        const controller = new AbortController();
+        const timerId = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            signal: controller.signal
+          });
+          let body = null;
+          try {
+            body = await res.json();
+          } catch {
+            body = null;
+          }
+          return { res, body };
+        } finally {
+          clearTimeout(timerId);
+        }
+      }
+
       function renderAccounts(accounts) {
         accountsList.innerHTML = "";
         for (const acc of accounts) {
@@ -1567,6 +1612,9 @@ export function renderHomePage(): string {
         if (portfolioCache && Array.isArray(portfolioCache.assetRows) && portfolioCache.assetRows.length) {
           state.assetRows = portfolioCache.assetRows;
           state.positionRows = Array.isArray(portfolioCache.positionRows) ? portfolioCache.positionRows : [];
+          state.moverRows = Array.isArray(portfolioCache.moverRows)
+            ? portfolioCache.moverRows
+            : state.positionRows;
           state.futureSeries = Array.isArray(portfolioCache.futureSeries) ? portfolioCache.futureSeries : [];
           state.dividendSeries = Array.isArray(portfolioCache.dividendSeries) ? portfolioCache.dividendSeries : [];
           state.upcomingEvents = Array.isArray(portfolioCache.upcomingEvents) ? portfolioCache.upcomingEvents : [];
@@ -1606,12 +1654,8 @@ export function renderHomePage(): string {
         setLoading(true);
         try {
           const token = tokenInput.value.trim();
-          const res = await fetch("/api/accounts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token })
-          });
-          const body = await res.json();
+          await syncServerToken(token);
+          const { res, body } = await postJsonWithTimeout("/api/accounts", {}, 12000);
           if (res.ok && body && Array.isArray(body.accounts)) {
             renderAccounts(body.accounts);
             writeCache(CACHE_KEYS.accounts, {
@@ -1639,11 +1683,7 @@ export function renderHomePage(): string {
         try {
           const token = tokenInput.value.trim();
           let accountId = accountInput.value.trim();
-
-          if (!token) {
-            if (!silent) setStatus("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0442\u043e\u043a\u0435\u043d");
-            return false;
-          }
+          await syncServerToken(token);
 
           if (!accountId) {
             const loaded = await loadAccounts({ silent: true });
@@ -1654,21 +1694,11 @@ export function renderHomePage(): string {
             accountId = accountInput.value.trim();
           }
 
-          const [portfolioRes, analyticsRes] = await Promise.all([
-            fetch("/api/portfolio", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ token, accountId })
-            }),
-            fetch("/api/analytics", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ token, accountId })
-            })
-          ]);
-
-          const portfolioBody = await portfolioRes.json();
-          const analyticsBody = await analyticsRes.json();
+          const { res: portfolioRes, body: portfolioBody } = await postJsonWithTimeout(
+            "/api/portfolio",
+            { accountId },
+            20000
+          );
 
           if (!(portfolioRes.ok && portfolioBody && Array.isArray(portfolioBody.positions))) {
             if (!silent) setStatus("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u043f\u043e\u0440\u0442\u0444\u0435\u043b\u044c");
@@ -1676,12 +1706,32 @@ export function renderHomePage(): string {
           }
 
           state.positionRows = mapPositionsToRows(portfolioBody.positions);
+          state.moverRows = mapPositionsToRows(
+            Array.isArray(portfolioBody.moverPositions)
+              ? portfolioBody.moverPositions
+              : portfolioBody.positions
+          );
           state.investedTotal = state.positionRows.reduce((sum, row) => sum + row.invested, 0);
           state.profitTotal = state.positionRows.reduce((sum, row) => sum + row.profit, 0);
           state.profitPct = state.investedTotal > 0 ? (state.profitTotal / state.investedTotal) * 100 : 0;
 
           state.portfolioTotalText = portfolioBody.total || "-";
           state.portfolioTotalValue = parseNumberFromText(portfolioBody.total || "");
+
+          let analyticsRes = { ok: false };
+          let analyticsBody = null;
+          try {
+            const analyticsResp = await postJsonWithTimeout(
+              "/api/analytics",
+              { accountId },
+              12000
+            );
+            analyticsRes = analyticsResp.res;
+            analyticsBody = analyticsResp.body;
+          } catch {
+            analyticsRes = { ok: false };
+            analyticsBody = null;
+          }
 
           if (analyticsRes.ok && analyticsBody) {
             state.assetRows = mapAssetRowsFromAnalytics(analyticsBody);
@@ -1768,6 +1818,7 @@ export function renderHomePage(): string {
           writeCache(CACHE_KEYS.portfolio, {
             assetRows: state.assetRows,
             positionRows: state.positionRows,
+            moverRows: state.moverRows,
             futureSeries: state.futureSeries,
             dividendSeries: state.dividendSeries,
             upcomingEvents: state.upcomingEvents,
@@ -1797,11 +1848,6 @@ export function renderHomePage(): string {
       }
 
       async function refreshCacheData() {
-        const token = tokenInput.value.trim();
-        if (!token) {
-          setStatus("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0442\u043e\u043a\u0435\u043d \u0434\u043b\u044f \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f \u043a\u044d\u0448\u0430");
-          return;
-        }
         setStatus("\u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e \u043a\u044d\u0448...");
         const ok = await loadPortfolio({ silent: true });
         setStatus(ok ? "\u041a\u044d\u0448 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d" : "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u043a\u044d\u0448");
@@ -1812,16 +1858,32 @@ export function renderHomePage(): string {
 
         const hasCache = restoreFromCache();
         portfolioBtn.disabled = false;
-        if (hasCache) return;
 
-        if (!tokenInput.value.trim()) {
-          setStatus("\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0442\u043e\u043a\u0435\u043d \u0434\u043b\u044f \u043f\u0435\u0440\u0432\u043e\u0439 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438");
+        setStatus(
+          hasCache
+            ? "\u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e \u043f\u043e\u0440\u0442\u0444\u0435\u043b\u044c \u0432 \u0444\u043e\u043d\u0435..."
+            : "\u041f\u0435\u0440\u0432\u044b\u0439 \u0437\u0430\u043f\u0443\u0441\u043a: \u0437\u0430\u0433\u0440\u0443\u0436\u0430\u044e \u0434\u0430\u043d\u043d\u044b\u0435..."
+        );
+        const updateResult = await withTimeoutResult(loadPortfolio({ silent: true }), 30000);
+        if (updateResult.timedOut) {
+          setLoading(false);
+          setStatus(
+            hasCache
+              ? "\u0422\u0430\u0439\u043c\u0430\u0443\u0442 \u0444\u043e\u043d\u043e\u0432\u043e\u0433\u043e \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f, \u043f\u043e\u043a\u0430\u0437\u0430\u043d\u044b \u0434\u0430\u043d\u043d\u044b\u0435 \u0438\u0437 \u043a\u044d\u0448\u0430"
+              : "\u0422\u0430\u0439\u043c\u0430\u0443\u0442 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438 \u043f\u043e\u0440\u0442\u0444\u0435\u043b\u044f"
+          );
           return;
         }
-
-        setStatus("\u041f\u0435\u0440\u0432\u044b\u0439 \u0437\u0430\u043f\u0443\u0441\u043a: \u0437\u0430\u0433\u0440\u0443\u0436\u0430\u044e \u0434\u0430\u043d\u043d\u044b\u0435...");
-        const ok = await loadPortfolio({ silent: true });
-        setStatus(ok ? "\u0414\u0430\u043d\u043d\u044b\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u044b" : "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0434\u0430\u043d\u043d\u044b\u0435");
+        const ok = Boolean(updateResult.value);
+        setStatus(
+          ok
+            ? (hasCache
+              ? "\u041f\u043e\u0440\u0442\u0444\u0435\u043b\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d"
+              : "\u0414\u0430\u043d\u043d\u044b\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u044b")
+            : (hasCache
+              ? "\u041f\u043e\u043a\u0430\u0437\u0430\u043d\u044b \u0434\u0430\u043d\u043d\u044b\u0435 \u0438\u0437 \u043a\u044d\u0448\u0430"
+              : "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0434\u0430\u043d\u043d\u044b\u0435")
+        );
       }
 
       tokenToggleBtn.addEventListener("click", () => {
@@ -1832,15 +1894,13 @@ export function renderHomePage(): string {
 
       rememberBtn.addEventListener("click", () => {
         const token = tokenInput.value.trim();
-        if (!token) {
-          localStorage.removeItem("tinvest_token");
-          saveSessionToken("");
-          setStatus("\u0422\u043e\u043a\u0435\u043d \u0443\u0434\u0430\u043b\u0435\u043d \u0438\u0437 localStorage");
-          return;
-        }
         saveSessionToken(token);
-        localStorage.setItem("tinvest_token", token);
-        setStatus("\u0422\u043e\u043a\u0435\u043d \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d \u0432 localStorage");
+        void syncServerToken(token).catch(() => undefined);
+        setStatus(
+          token
+            ? "\u0422\u043e\u043a\u0435\u043d \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d \u0432 sessionStorage"
+            : "\u0422\u043e\u043a\u0435\u043d \u043e\u0447\u0438\u0449\u0435\u043d \u0432 sessionStorage"
+        );
       });
 
       tokenInput.addEventListener("input", () => {

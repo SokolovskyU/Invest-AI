@@ -1,0 +1,10 @@
+dist
+web/dist
+node_modules
+coverage
+playwright-report
+test-results
+.cache
+.temp
+.project-control
+web/src/api/generated.ts
