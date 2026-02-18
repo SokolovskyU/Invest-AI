@@ -229,19 +229,19 @@ const ASSET_TABLE_COLUMNS: Array<{
     key: "passiveIncome",
     label: "Дивиденды/купоны",
     textKey: "passiveIncomeText",
-    help: "Сумма начисленных/полученных дивидендов и купонов по позиции.",
+    help: "Прогноз дивидендов и купонов по позиции на ближайшие 12 месяцев.",
   },
   {
     key: "assetYield",
     label: "Доходность актива",
     textKey: "assetYieldText",
-    help: "Текущая стоимость - вложено.",
+    help: "Для акций/ETF: текущая стоимость - вложено. Для облигаций: годовой вклад сближения к номиналу до погашения.",
   },
   {
     key: "profitValue",
     label: "Прибыль актива",
     textKey: "profitText",
-    help: "Доходность актива + дивиденды/купоны.",
+    help: "Доходность актива + дивиденды/купоны (в таблице — прогноз на 12 месяцев).",
   },
   {
     key: "yieldPct",
@@ -445,6 +445,55 @@ function shortAssetLabel(value: string): string {
   if (!cleaned) return "Актив";
   if (cleaned.length <= 8) return cleaned.toUpperCase();
   return cleaned.slice(0, 8).toUpperCase();
+}
+
+function normalizeAssetLookupKey(value: string): string {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function normalizeTickerLikeKey(value: string): string {
+  const source = String(value || "").trim().toUpperCase();
+  if (!source) return "";
+  const cyrToLat: Record<string, string> = {
+    А: "A",
+    В: "B",
+    Е: "E",
+    К: "K",
+    М: "M",
+    Н: "H",
+    О: "O",
+    Р: "P",
+    С: "C",
+    Т: "T",
+    У: "Y",
+    Х: "X",
+  };
+  return source
+    .split("")
+    .map((char) => cyrToLat[char] || char)
+    .join("")
+    .replace(/[^A-Z0-9.\-]/g, "");
+}
+
+function extractAssetCode(value: string): string {
+  const source = String(value || "").trim();
+  if (!source) return "";
+  const inBrackets = source.match(/\(([A-Za-zА-Яа-я0-9.\-]{2,24})\)/);
+  if (inBrackets?.[1]) {
+    return normalizeTickerLikeKey(inBrackets[1]);
+  }
+  const tokens = source.match(/[A-Za-zА-Яа-я0-9.\-]{3,}/g) || [];
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = normalizeTickerLikeKey(tokens[index]);
+    if (!token) continue;
+    const hasDigit = /\d/.test(token);
+    const hasLetter = /[A-Z]/.test(token);
+    if (hasDigit && hasLetter) return token;
+  }
+  return "";
 }
 
 function toBarHeight(value: number, max: number, minPercent = 4): string {
@@ -1416,6 +1465,61 @@ export function NativeApp({ pathname, onNavigate }: NativeAppProps) {
     [analyticsQuery.data]
   );
 
+  const myAssetsPassiveIncomeForecastMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const month of analyticsQuery.data?.incomeNext12Details || []) {
+      for (const item of month.items || []) {
+        const eventType = String(item.eventType || "").toLowerCase();
+        const isDividendOrCoupon =
+          eventType.includes("дивид") || eventType.includes("купон");
+        if (!isDividendOrCoupon) continue;
+        const amount = Number(item.amount) || parseNumberText(item.amountText);
+        if (!(amount > 0)) continue;
+        const rawName = String(item.ticker || "").trim();
+        if (!rawName) continue;
+        const fullKey = normalizeAssetLookupKey(rawName);
+        map.set(fullKey, (map.get(fullKey) || 0) + amount);
+        const code = extractAssetCode(rawName);
+        if (code) {
+          const codeKey = `code:${code}`;
+          map.set(codeKey, (map.get(codeKey) || 0) + amount);
+        }
+      }
+    }
+    return map;
+  }, [analyticsQuery.data]);
+
+  const useForecastInMyAssetsTable =
+    hasPassiveBreakdownDetails && myAssetsPassiveIncomeForecastMap.size > 0;
+
+  const myAssetsRowsForTable = useMemo(() => {
+    if (!useForecastInMyAssetsTable) {
+      return myAssetsRows;
+    }
+
+    return myAssetsRows.map((row) => {
+      const fullKey = normalizeAssetLookupKey(row.name);
+      const code = extractAssetCode(row.name);
+      const passiveIncomeForecast =
+        myAssetsPassiveIncomeForecastMap.get(fullKey) ??
+        (code ? myAssetsPassiveIncomeForecastMap.get(`code:${code}`) : undefined) ??
+        0;
+      const assetYield = Number(row.assetYield) || parseNumberText(row.assetYieldText);
+      const invested = Number(row.invested) || parseNumberText(row.investedText);
+      const profitValue = assetYield + passiveIncomeForecast;
+      const yieldPct = invested !== 0 ? (profitValue / invested) * 100 : 0;
+      return {
+        ...row,
+        passiveIncome: passiveIncomeForecast,
+        passiveIncomeText: formatRub(passiveIncomeForecast),
+        profitValue,
+        profitText: formatRub(profitValue),
+        yieldPct,
+        yieldPctText: formatPercent(yieldPct),
+      };
+    });
+  }, [myAssetsRows, myAssetsPassiveIncomeForecastMap, useForecastInMyAssetsTable]);
+
   const allAssetsDonutRows = useMemo(() => {
     const rows = myAssetsRows
       .map((row, index) => {
@@ -1636,7 +1740,7 @@ export function NativeApp({ pathname, onNavigate }: NativeAppProps) {
   }, [diversificationBreakdownRows, pinnedDiversificationRowId, hoverDiversificationRowId]);
 
   const sortedMyAssetsRows = useMemo(() => {
-    const rows = myAssetsRows.slice();
+    const rows = myAssetsRowsForTable.slice();
     rows.sort((a, b) => {
       if (assetsSortKey === "name") {
         const byName = a.name.localeCompare(b.name, "ru", { sensitivity: "base" });
@@ -1651,7 +1755,7 @@ export function NativeApp({ pathname, onNavigate }: NativeAppProps) {
       return assetsSortDirection === "desc" ? right - left : left - right;
     });
     return rows;
-  }, [myAssetsRows, assetsSortDirection, assetsSortKey]);
+  }, [myAssetsRowsForTable, assetsSortDirection, assetsSortKey]);
 
   const myAssetsTotals = useMemo(() => {
     const source = analyticsQuery.data?.myAssetsTotals;
@@ -1676,19 +1780,35 @@ export function NativeApp({ pathname, onNavigate }: NativeAppProps) {
         portfolioSharePct: 0,
       }
     );
-    const yieldPct = totals.invested !== 0 ? (totals.profitValue / totals.invested) * 100 : 0;
+    const passiveIncomeForecastTotal = myAssetsRowsForTable.reduce(
+      (sum, row) => sum + (Number(row.passiveIncome) || parseNumberText(row.passiveIncomeText)),
+      0
+    );
+    const profitForecastTotal = myAssetsRowsForTable.reduce(
+      (sum, row) => sum + (Number(row.profitValue) || parseNumberText(row.profitText)),
+      0
+    );
+    const yieldPct =
+      totals.invested !== 0 ? (profitForecastTotal / totals.invested) * 100 : 0;
     return {
       quantityText: source?.quantityText || formatQuantityValue(totals.quantity),
       investedText: source?.investedText || formatRub(totals.invested),
       currentValueText: source?.currentValueText || formatRub(totals.currentValue),
-      passiveIncomeText: source?.passiveIncomeText || formatRub(totals.passiveIncome),
+      passiveIncomeText:
+        useForecastInMyAssetsTable
+          ? formatRub(passiveIncomeForecastTotal)
+          : source?.passiveIncomeText || formatRub(totals.passiveIncome),
       assetYieldText: source?.assetYieldText || formatRub(totals.assetYield),
-      profitText: source?.profitText || formatRub(totals.profitValue),
-      yieldPctText: source?.yieldPctText || formatPercent(yieldPct),
+      profitText: useForecastInMyAssetsTable
+        ? formatRub(profitForecastTotal)
+        : source?.profitText || formatRub(totals.profitValue),
+      yieldPctText: useForecastInMyAssetsTable
+        ? formatPercent(yieldPct)
+        : source?.yieldPctText || formatPercent(yieldPct),
       portfolioSharePctText:
         source?.portfolioSharePctText || formatPercent(totals.portfolioSharePct),
     };
-  }, [analyticsQuery.data, myAssetsRows]);
+  }, [analyticsQuery.data, myAssetsRows, myAssetsRowsForTable, useForecastInMyAssetsTable]);
 
   const futurePreview = useMemo(() => incomeFuture.slice(-8), [incomeFuture]);
   const dividendsPreview = useMemo(() => dividendsReceived.slice(-8), [dividendsReceived]);

@@ -1235,13 +1235,21 @@ button:focus-visible {
   border: 1px solid #3f4762;
   border-radius: 10px;
   background: #2d3346;
-  overflow-x: auto;
+  max-height: min(62vh, 640px);
+  overflow: auto;
 }
 
 .native-assets-table {
   width: 100%;
   border-collapse: collapse;
   min-width: 1180px;
+}
+
+.native-assets-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #31394f;
 }
 
 .native-assets-table th,

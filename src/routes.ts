@@ -1498,6 +1498,8 @@ export function registerRoutes(app: Express, config: AppConfig): void {
         const fromMeta = normalizeCurrencyCode(metaCurrency);
         return fromPosition || fromMeta || currency;
       };
+      const nowMs = Date.now();
+      const msPerYear = 365.25 * 24 * 60 * 60 * 1000;
       const myAssets = positions
         .map((p, index) => {
           const type = (p.instrument_type || "other").toLowerCase();
@@ -1507,7 +1509,19 @@ export function registerRoutes(app: Express, config: AppConfig): void {
           const cur = toNumber(p.current_price);
           const invested = avg * qty;
           const currentValue = cur * qty;
-          const assetYield = currentValue - invested;
+          const nominal = toNumber(meta?.nominal);
+          const maturityMs = Number(meta?.maturityMs) || 0;
+          let assetYield = currentValue - invested;
+          if (type === "bond" && nominal > 0) {
+            const redemptionValue = nominal * qty;
+            const pullToParTotal = redemptionValue - currentValue;
+            if (maturityMs > nowMs) {
+              const yearsToMaturity = Math.max((maturityMs - nowMs) / msPerYear, 1 / 12);
+              assetYield = pullToParTotal / yearsToMaturity;
+            } else if (maturityMs > 0) {
+              assetYield = pullToParTotal;
+            }
+          }
           const figi = String(p?.figi || "").trim();
           const uid = String(p?.instrument_uid || p?.instrumentUid || "").trim();
           const passiveIncomeByFigiValue = figi ? passiveIncomeByFigi.get(figi) : undefined;
